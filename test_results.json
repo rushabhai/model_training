@@ -1,0 +1,98 @@
+{
+  "timestamp": "2025-09-16T15:41:23.374578",
+  "summary": {
+    "passed": 0,
+    "failed": 9,
+    "success_rate": 0.0
+  },
+  "results": [
+    {
+      "test": "API Health Check",
+      "status": "FAILED",
+      "duration": 0,
+      "error": "HTTPConnectionPool(host='localhost', port=8000): Read timed out. (read timeout=10)"
+    },
+    {
+      "test": "Data Statistics",
+      "status": "FAILED",
+      "duration": 0,
+      "error": "HTTPConnectionPool(host='localhost', port=8000): Read timed out. (read timeout=15)"
+    },
+    {
+      "test": "Filter Options",
+      "status": "FAILED",
+      "duration": 0,
+      "error": "HTTPConnectionPool(host='localhost', port=8000): Read timed out. (read timeout=10)"
+    },
+    {
+      "test": "Performance Monitoring",
+      "status": "FAILED",
+      "duration": 0,
+      "error": "HTTPConnectionPool(host='localhost', port=8000): Read timed out. (read timeout=10)"
+    },
+    {
+      "test": "Database Optimization",
+      "status": "FAILED",
+      "duration": 0,
+      "error": "HTTPConnectionPool(host='localhost', port=8000): Read timed out. (read timeout=60)"
+    },
+    {
+      "test": "Dashboard with Filtering",
+      "status": "FAILED",
+      "duration": 21.352132081985474,
+      "details": {
+        "success": false,
+        "filters_tested": 4,
+        "successful_filters": 0,
+        "avg_response_time_ms": 0,
+        "results": [
+          {
+            "filter": {
+              "brand": "X"
+            },
+            "success": false,
+            "error": "('Connection aborted.', ConnectionResetError(104, 'Connection reset by peer'))"
+          },
+          {
+            "filter": {
+              "brand": "X",
+              "channel_id": "Myntra"
+            },
+            "success": false,
+            "error": "HTTPConnectionPool(host='localhost', port=8000): Max retries exceeded with url: /dashboard (Caused by NewConnectionError('<urllib3.connection.HTTPConnection object at 0x734c904072c0>: Failed to establish a new connection: [Errno 111] Connection refused'))"
+          },
+          {
+            "filter": {
+              "product_category": "Electronics"
+            },
+            "success": false,
+            "error": "HTTPConnectionPool(host='localhost', port=8000): Max retries exceeded with url: /dashboard (Caused by NewConnectionError('<urllib3.connection.HTTPConnection object at 0x734c90406ae0>: Failed to establish a new connection: [Errno 111] Connection refused'))"
+          },
+          {
+            "filter": {},
+            "success": false,
+            "error": "HTTPConnectionPool(host='localhost', port=8000): Max retries exceeded with url: /dashboard (Caused by NewConnectionError('<urllib3.connection.HTTPConnection object at 0x734c90405f70>: Failed to establish a new connection: [Errno 111] Connection refused'))"
+          }
+        ]
+      }
+    },
+    {
+      "test": "Forecast Accuracy",
+      "status": "FAILED",
+      "duration": 0,
+      "error": "HTTPConnectionPool(host='localhost', port=8000): Max retries exceeded with url: /forecast (Caused by NewConnectionError('<urllib3.connection.HTTPConnection object at 0x734c9041c710>: Failed to establish a new connection: [Errno 111] Connection refused'))"
+    },
+    {
+      "test": "Model Validation",
+      "status": "FAILED",
+      "duration": 0,
+      "error": "HTTPConnectionPool(host='localhost', port=8000): Max retries exceeded with url: /validate (Caused by NewConnectionError('<urllib3.connection.HTTPConnection object at 0x734c9041d010>: Failed to establish a new connection: [Errno 111] Connection refused'))"
+    },
+    {
+      "test": "Quarterly Validation (Optimized)",
+      "status": "FAILED",
+      "duration": 0,
+      "error": "HTTPConnectionPool(host='localhost', port=8000): Max retries exceeded with url: /validate/quarterly (Caused by NewConnectionError('<urllib3.connection.HTTPConnection object at 0x734c90406540>: Failed to establish a new connection: [Errno 111] Connection refused'))"
+    }
+  ]
+}

@@ -1,0 +1,87 @@
+-- 0) Clean up if you created earlier drafts
+DROP MATERIALIZED VIEW IF EXISTS demand_daily;
+DROP MATERIALIZED VIEW IF EXISTS brand_x_gold;
+
+-- 1) GOLD MV: compute demand_qty in an inner CTE; use it outside for censored_oos
+CREATE MATERIALIZED VIEW brand_x_gold AS
+WITH base AS (
+  SELECT
+    date::date                               AS day,
+    launch_date::date                        AS launch_date,
+    sku_id, brand, channel_id, warehouse_id,
+    product_category, product_sub_category, lifecycle_stage,
+    promotion_type,
+    days_since_launch, week_of_year, quarter,
+
+    mrp, cost_price, selling_price, competitor_avg_price,
+    marketing_spend, cac, revenue, gross_profit, net_profit,
+    brand_channel_budget, quarter_revenue,
+
+    discount_percent, price_position_vs_mrp, price_vs_competition,
+    expected_return_rate, gross_margin, net_margin, quarter_qoq_growth,
+    demand_lambda, price_elasticity_effect, festival_intensity,
+    weather_impact, economic_sentiment, roas, monthly_seasonality,
+    brand_strength_score, quality_score, trend_factor, cannibalization_factor,
+    dow_factor, quarter_yoy_growth,
+
+    units_sold, on_hand_inventory, inbound_inventory, lead_time_days,
+    units_returned, orders, cancelled_orders, cancelled_units, ordered_units,
+    holiday_flag, promotion_flag, stockout_flag
+  FROM brand_x_forecasting
+),
+calc AS (
+  SELECT
+    *,
+    /* Demand proxy (no future peeking): units_sold else ordered-cancelled; minus returns; clamp >=0 */
+    GREATEST(
+      0,
+      COALESCE(units_sold,
+               COALESCE(ordered_units, 0) - COALESCE(cancelled_units, 0))
+      - COALESCE(units_returned, 0)
+    )::INT AS demand_qty,
+
+    CASE WHEN mrp > 0 THEN selling_price / mrp ELSE NULL END AS price_index_mrp,
+    CASE WHEN competitor_avg_price > 0
+         THEN selling_price / competitor_avg_price ELSE NULL END AS price_index_comp,
+
+    EXTRACT(ISODOW FROM day)::SMALLINT  AS dow,         -- 1..7
+    EXTRACT(WEEK  FROM day)::SMALLINT   AS week_num,
+    EXTRACT(MONTH FROM day)::SMALLINT   AS month_num,
+    EXTRACT(QUARTER FROM day)::SMALLINT AS quarter_num
+  FROM base
+),
+feat AS (
+  SELECT
+    c.*,
+    /* Safer boolean: treat NULL as FALSE */
+    (COALESCE(c.stockout_flag, FALSE) AND c.demand_qty = 0) AS censored_oos
+  FROM calc c
+)
+SELECT * FROM feat
+WITH NO DATA;
+
+-- 2) Indexes for speed
+CREATE INDEX IF NOT EXISTS ix_gold_day             ON brand_x_gold(day);
+CREATE INDEX IF NOT EXISTS ix_gold_sku_wh_day      ON brand_x_gold(sku_id, warehouse_id, day);
+CREATE INDEX IF NOT EXISTS ix_gold_cat_day         ON brand_x_gold(product_category, day);
+
+-- 3) Populate the GOLD MV
+REFRESH MATERIALIZED VIEW CONCURRENTLY brand_x_gold;
+
+-- 4) Modeling MV depends on GOLD
+CREATE MATERIALIZED VIEW demand_daily AS
+SELECT
+  day, sku_id, warehouse_id, channel_id, brand,
+  product_category, product_sub_category,
+  demand_qty, censored_oos,
+  selling_price, discount_percent, roas,
+  holiday_flag, promotion_flag,
+  price_index_mrp, price_index_comp,
+  inbound_inventory, on_hand_inventory, stockout_flag
+FROM brand_x_gold
+WITH NO DATA;
+
+CREATE INDEX IF NOT EXISTS ix_dd_sku_wh_day ON demand_daily(sku_id, warehouse_id, day);
+CREATE INDEX IF NOT EXISTS ix_dd_brand_day  ON demand_daily(brand, day);
+
+REFRESH MATERIALIZED VIEW CONCURRENTLY demand_daily;

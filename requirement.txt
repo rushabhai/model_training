@@ -1,0 +1,318 @@
+# train_router.py
+import os, argparse, math, sys
+from typing import List, Tuple, Optional, Dict
+import numpy as np
+import pandas as pd
+from datetime import date, datetime
+from sqlalchemy import create_engine, text
+
+# -------------------
+# Metrics
+# -------------------
+def wape(y, yhat):
+    y = np.asarray(y); yhat = np.asarray(yhat)
+    den = np.abs(y).sum()
+    return float(np.abs(y - yhat).sum() / den) if den != 0 else math.nan
+
+def smape(y, yhat):
+    y = np.asarray(y, float); yhat = np.asarray(yhat, float)
+    denom = np.abs(y) + np.abs(yhat)
+    return float(2.0 * np.mean(np.divide(np.abs(y - yhat), denom,
+                                         out=np.zeros_like(denom), where=denom>0)))
+
+def mae(y, yhat): return float(np.mean(np.abs(np.asarray(y) - np.asarray(yhat))))
+def rmse(y, yhat): return float(np.sqrt(np.mean((np.asarray(y) - np.asarray(yhat))**2)))
+
+def mase(y, yhat, season=7):
+    y = np.asarray(y, float); yhat = np.asarray(yhat, float)
+    if len(y) <= season: return math.nan
+    naive = np.abs(y[season:] - y[:-season]).mean()
+    return float(np.abs(y - yhat).mean() / naive) if naive > 0 else math.nan
+
+def bias_pct(y, yhat):
+    y = np.asarray(y); yhat = np.asarray(yhat); den = y.sum()
+    return float(100.0 * (yhat - y).sum() / den) if den != 0 else math.nan
+
+# -------------------
+# Models
+# -------------------
+SEASON = 7
+
+def croston_sba_forecast(y: np.ndarray, h: int = 7, alpha: float = 0.1) -> np.ndarray:
+    y = np.asarray(y, dtype=float)
+    p = 0; init = False; zhat = 0.0; phat = 1.0
+    for val in y:
+        p += 1
+        if val > 0:
+            if not init:
+                zhat, phat, init = val, p, True
+            else:
+                zhat = zhat + alpha * (val - zhat)
+                phat = phat + alpha * (p - phat)
+            p = 0
+    if not init: zhat, phat = 0.0, 1.0
+    zhat = zhat * (1 - alpha/2.0)  # SBA bias correction
+    rate = 0.0 if phat == 0 else zhat / phat
+    return np.full(h, rate, dtype=float)
+
+def hw_additive_fit_predict(y: np.ndarray, h: int, season: int,
+                            alpha: float, beta: float, gamma: float) -> np.ndarray:
+    y = np.asarray(y, dtype=float); n = len(y)
+    if n < 2*season:
+        # fallback: seasonal naive or last value
+        if n >= season:
+            return np.array([y[-season + (i % season)] for i in range(h)], dtype=float)
+        return np.full(h, y[-1] if n>0 else 0.0)
+    s = np.zeros(season, dtype=float)
+    season_mean1 = y[:season].mean()
+    for i in range(season): s[i] = y[i] - season_mean1
+    season_mean2 = y[season:2*season].mean() if n >= 2*season else season_mean1
+    l = season_mean2
+    b = (season_mean2 - season_mean1) / season
+    for t in range(n):
+        idx = t % season
+        yt = y[t]
+        lt = alpha * (yt - s[idx]) + (1 - alpha) * (l + b)
+        bt = beta  * (lt - l)     + (1 - beta)  * b
+        st = gamma * (yt - lt)    + (1 - gamma) * s[idx]
+        l, b, s[idx] = lt, bt, st
+    f = np.zeros(h, dtype=float)
+    for k in range(1, h+1):
+        idx = (k-1) % season
+        f[k-1] = l + k * b + s[idx]
+    return f
+
+HW_GRID = [
+    (0.2, 0.05, 0.2),
+    (0.3, 0.05, 0.2),
+    (0.2, 0.05, 0.1),
+    (0.1, 0.05, 0.2),
+    (0.2, 0.01, 0.2),
+]
+
+def pick_hw_params(y: np.ndarray, season: int = SEASON) -> Tuple[float,float,float]:
+    y = np.asarray(y, float); n = len(y)
+    if n < 2*season + 7: return HW_GRID[0]
+    tune_n = min(max(2*season + 14, n//2), n-1)
+    best = None; best_mae = float("inf")
+    for (a,b,g) in HW_GRID:
+        preds, acts = [], []
+        for t in range(2*season, tune_n):
+            yh = hw_additive_fit_predict(y[:t], h=1, season=season, alpha=a, beta=b, gamma=g)[0]
+            preds.append(yh); acts.append(y[t])
+        if len(preds)==0: continue
+        mae_val = np.mean(np.abs(np.array(acts)-np.array(preds)))
+        if mae_val < best_mae:
+            best_mae, best = mae_val, (a,b,g)
+    return best if best else HW_GRID[0]
+
+# -------------------
+# Series bucketing (ADI & CV²)
+# -------------------
+def bucket_adi_cv2(y: np.ndarray) -> Tuple[float, float, str]:
+    y = np.asarray(y, float)
+    nz_idx = np.where(y > 0)[0]
+    if len(nz_idx) >= 2:
+        gaps = np.diff(nz_idx)
+        adi = float(np.mean(gaps))
+    else:
+        adi = float("inf")
+    mu = float(np.mean(y)) if len(y) else 0.0
+    sigma = float(np.std(y, ddof=0)) if len(y) else 0.0
+    cv2 = float((sigma/mu)**2) if mu > 0 else float("inf")
+    if adi <= 1.32 and cv2 <= 0.49:
+        bucket = "SMOOTH"
+    elif adi <= 1.32 and cv2 > 0.49:
+        bucket = "ERRATIC"
+    else:
+        bucket = "INTERMITTENT"
+    return adi, cv2, bucket
+
+# -------------------
+# Backtest
+# -------------------
+def rolling_backtest(y: np.ndarray, bucket: str, horizon: int = 7,
+                     step: int = 7, season: int = SEASON,
+                     min_train: int = 28) -> Tuple[np.ndarray, np.ndarray]:
+    y = np.asarray(y, float); n = len(y)
+    t0 = max(min_train, 2*season) if bucket != "INTERMITTENT" else min_train
+    if n <= t0 + horizon:
+        # relax t0 slightly if short
+        t0 = max(season, min_train) if bucket != "INTERMITTENT" else min_train
+        if n <= t0 + horizon:
+            return np.array([]), np.array([])
+    preds, acts = [], []
+    if bucket == "INTERMITTENT":
+        for t in range(t0, n - horizon + 1, step):
+            yh = croston_sba_forecast(y[:t], h=horizon)
+            preds.extend(yh); acts.extend(y[t:t+horizon])
+    else:
+        params = pick_hw_params(y[:max(t0, min(70, n))], season=season)
+        a,b,g = params
+        for t in range(t0, n - horizon + 1, step):
+            yh = hw_additive_fit_predict(y[:t], h=horizon, season=season, alpha=a, beta=b, gamma=g)
+            preds.extend(yh); acts.extend(y[t:t+horizon])
+    return np.array(acts), np.array(preds)
+
+# -------------------
+# Data access
+# -------------------
+def build_filters(args) -> str:
+    wh = []
+    if args.brand:            wh.append("brand = :brand")
+    if args.channel_id:       wh.append("channel_id = :channel_id")
+    if args.product_category: wh.append("product_category = :product_category")
+    if args.warehouse_id:     wh.append("warehouse_id = :warehouse_id")
+    if args.start_date:       wh.append("day >= :start_date")
+    if args.end_date:         wh.append("day <= :end_date")
+    return (" WHERE " + " AND ".join(wh)) if wh else ""
+
+def fetch_series_keys(engine, args) -> List[Tuple[str,str,int]]:
+    sql = f"""
+      SELECT sku_id, warehouse_id, COUNT(*) AS n_points, SUM(demand_qty) AS sum_y
+      FROM demand_daily
+      {build_filters(args)}
+      GROUP BY sku_id, warehouse_id
+      HAVING COUNT(*) >= :min_points
+      ORDER BY sum_y DESC
+      LIMIT :series_limit
+    """
+    with engine.connect() as con:
+        df = pd.read_sql(text(sql), con, params={
+            "brand": args.brand, "channel_id": args.channel_id,
+            "product_category": args.product_category, "warehouse_id": args.warehouse_id,
+            "start_date": args.start_date, "end_date": args.end_date,
+            "min_points": args.min_points, "series_limit": args.series_limit
+        })
+    return list(df[["sku_id","warehouse_id","n_points"]].itertuples(index=False, name=None))
+
+def fetch_series(engine, args, sku_id: str, warehouse_id: str) -> pd.DataFrame:
+    sql = f"""
+      SELECT day, demand_qty, censored_oos
+      FROM demand_daily
+      {build_filters(args)} {(" AND " if build_filters(args) else " WHERE ")} sku_id = :sku_id AND warehouse_id = :warehouse_id
+      ORDER BY day
+    """
+    with engine.connect() as con:
+        df = pd.read_sql(text(sql), con, params={
+            "brand": args.brand, "channel_id": args.channel_id,
+            "product_category": args.product_category, "warehouse_id": args.warehouse_id,
+            "start_date": args.start_date, "end_date": args.end_date,
+            "sku_id": sku_id, "warehouse_id": warehouse_id
+        })
+    # Ensure daily continuity if desired (optional); here we just use available days.
+    return df
+
+# -------------------
+# Main
+# -------------------
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--db", required=True, help="Postgres URI, e.g. postgresql+psycopg2://user:pass@host:5432/dbname")
+    ap.add_argument("--brand")
+    ap.add_argument("--channel_id")
+    ap.add_argument("--product_category")
+    ap.add_argument("--warehouse_id")
+    ap.add_argument("--start_date")
+    ap.add_argument("--end_date")
+    ap.add_argument("--horizon", type=int, default=7)
+    ap.add_argument("--step", type=int, default=7)
+    ap.add_argument("--season", type=int, default=7)
+    ap.add_argument("--min_train", type=int, default=56)
+    ap.add_argument("--min_points", type=int, default=42)
+    ap.add_argument("--series_limit", type=int, default=5000)
+    ap.add_argument("--outdir", default="./outputs")
+    args = ap.parse_args()
+
+    os.makedirs(args.outdir, exist_ok=True)
+    engine = create_engine(args.db)
+
+    # 1) Discover candidate series
+    series = fetch_series_keys(engine, args)
+    if not series:
+        print("No series found that meet min_points. Relax filters or check data.")
+        sys.exit(0)
+
+    rows = []
+    for (sku, wh, npts) in series:
+        sdf = fetch_series(engine, args, sku, wh)
+        if sdf.empty: continue
+        # TRAIN: exclude censored OOS days
+        train_y = sdf.loc[~sdf["censored_oos"], "demand_qty"].astype(float).values
+        # EVAL: use actuals over all days (includes potential OOS days) – business choice:
+        # If you prefer unconstrained demand accuracy, also exclude censored in eval:
+        eval_y = sdf["demand_qty"].astype(float).values
+
+        # Need enough data
+        if len(train_y) < max(args.min_train, 2*args.season) and len(train_y) < 28:
+            continue
+
+        # Bucket on last 52 weeks of *train_y*
+        tail = train_y[-364:] if len(train_y) > 364 else train_y
+        _, _, bucket = bucket_adi_cv2(tail)
+
+        # Rolling backtest on the *full* series using router (no leakage)
+        acts, preds = rolling_backtest(eval_y, bucket=bucket,
+                                       horizon=args.horizon, step=args.step,
+                                       season=args.season, min_train=args.min_train)
+        if len(acts) == 0: 
+            continue
+
+        rows.append({
+            "sku_id": sku, "warehouse_id": wh, "bucket": bucket,
+            "sum_y": float(acts.sum()), "n_eval": int(len(acts)),
+            "wape": wape(acts, preds), "smape": smape(acts, preds),
+            "mae": mae(acts, preds), "rmse": rmse(acts, preds),
+            "mase7": mase(acts, preds, season=args.season),
+            "bias_pct": bias_pct(acts, preds),
+        })
+
+    if not rows:
+        print("No evaluable series. Try lowering --min_train or --min_points.")
+        sys.exit(0)
+
+    res = pd.DataFrame(rows)
+
+    # Demand-weighted overall & by bucket
+    def wavg(df, col, wcol="sum_y"):
+        w = df[wcol].values
+        return float(np.average(df[col].values, weights=w)) if w.sum()>0 else math.nan
+
+    overall = pd.DataFrame([{
+        "model": "Router(HW-additive/Croston-SBA)",
+        "series_count": int(res.shape[0]),
+        "total_demand_eval": float(res["sum_y"].sum()),
+        "wape": wavg(res, "wape"),
+        "smape": wavg(res, "smape"),
+        "mae": wavg(res, "mae"),
+        "rmse": wavg(res, "rmse"),
+        "mase7": wavg(res, "mase7"),
+        "bias_pct": wavg(res, "bias_pct"),
+    }])
+
+    by_bucket = (res.groupby("bucket")
+                   .apply(lambda g: pd.Series({
+                       "series_count": int(g.shape[0]),
+                       "total_demand_eval": float(g["sum_y"].sum()),
+                       "wape": wavg(g, "wape"),
+                       "smape": wavg(g, "smape"),
+                       "mae": wavg(g, "mae"),
+                       "rmse": wavg(g, "rmse"),
+                       "mase7": wavg(g, "mase7"),
+                       "bias_pct": wavg(g, "bias_pct"),
+                   }))
+                   .reset_index())
+
+    worst = res.sort_values("wape", ascending=False).head(50)
+
+    # Save
+    res.to_csv(os.path.join(args.outdir, "router_metrics_per_series.csv"), index=False)
+    overall.to_csv(os.path.join(args.outdir, "router_overall_metrics.csv"), index=False)
+    by_bucket.to_csv(os.path.join(args.outdir, "router_metrics_by_bucket.csv"), index=False)
+    worst.to_csv(os.path.join(args.outdir, "router_worst50_by_wape.csv"), index=False)
+
+    print("Saved outputs in", os.path.abspath(args.outdir))
+    print(overall.to_string(index=False))
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,20 @@
+# 1) Python env
+python -m venv .venv
+source .venv/bin/activate  # on Windows: .venv\Scripts\activate
+pip install pandas numpy SQLAlchemy psycopg2-binary
+
+# 2) Create/refresh views (run SQL block in psql/GUI), then:
+export PG_URI='postgresql+psycopg2://rushabh:Root%40123@localhost:5432/StackLogix'
+
+
+# 3) Train + evaluate (default horizon=7, min history defaults set conservatively)
+python train_router.py --db "$PG_URI" --start_date 2022-01-01 --end_date 2025-08-31 \
+  --min_points 180 --min_train 56 --series_limit 5000
+# Optional filters:
+#   --brand "Brand X" --channel_id Myntra --product_category "Accessories" --warehouse_id "mumbai"
+# Change horizon:
+#   --horizon 7  (use 14, 28 if you want 2/4 weeks)
+
+
+
+source /home/rushabh/Downloads/stacklogix/.venv/bin/activate && export PG_URI='postgresql+psycopg2://rushabh:Root%40123@localhost:5432/StackLogix' && uvicorn app:app --reload --host 0.0.0.0 --port 8000

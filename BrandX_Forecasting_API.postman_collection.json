@@ -1,0 +1,748 @@
+{
+    "info": {
+        "_postman_id": "YOUR_POSTMAN_COLLECTION_ID",
+        "name": "Brand X Forecasting API",
+        "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+        "_exporter_id": "YOUR_EXPORTER_ID"
+    },
+    "variables": [
+        {
+            "key": "API_BASE",
+            "value": "http://localhost:8000",
+            "type": "string"
+        },
+        {
+            "key": "CONTENT_TYPE",
+            "value": "application/json",
+            "type": "string"
+        }
+    ],
+    "item": [
+        {
+            "name": "1. Basic Health Checks",
+            "item": [
+                {
+                    "name": "Health Check",
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{API_BASE}}/health",
+                            "host": [
+                                "{{API_BASE}}"
+                            ],
+                            "path": [
+                                "health"
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "API Documentation",
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{API_BASE}}/docs",
+                            "host": [
+                                "{{API_BASE}}"
+                            ],
+                            "path": [
+                                "docs"
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "OpenAPI Schema",
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{API_BASE}}/openapi.json",
+                            "host": [
+                                "{{API_BASE}}"
+                            ],
+                            "path": [
+                                "openapi.json"
+                            ]
+                        }
+                    },
+                    "response": []
+                }
+            ]
+        },
+        {
+            "name": "2. Monitoring & Metrics",
+            "item": [
+                {
+                    "name": "System Metrics",
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{API_BASE}}/metrics",
+                            "host": [
+                                "{{API_BASE}}"
+                            ],
+                            "path": [
+                                "metrics"
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Data Statistics",
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{API_BASE}}/data/stats",
+                            "host": [
+                                "{{API_BASE}}"
+                            ],
+                            "path": [
+                                "data",
+                                "stats"
+                            ]
+                        }
+                    },
+                    "response": []
+                }
+            ]
+        },
+        {
+            "name": "3. Basic Forecasting",
+            "item": [
+                {
+                    "name": "Simple Forecast - Intermittent Series",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "{{CONTENT_TYPE}}"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"sku_id\": \"X_003\",\n    \"warehouse_id\": \"bangalore\",\n    \"horizon\": 7\n}"
+                        },
+                        "url": {
+                            "raw": "{{API_BASE}}/forecast",
+                            "host": [
+                                "{{API_BASE}}"
+                            ],
+                            "path": [
+                                "forecast"
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Forecast with Brand Filter",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "{{CONTENT_TYPE}}"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"sku_id\": \"X_003\",\n    \"warehouse_id\": \"bangalore\",\n    \"horizon\": 7,\n    \"brand\": \"X\"\n}"
+                        },
+                        "url": {
+                            "raw": "{{API_BASE}}/forecast",
+                            "host": [
+                                "{{API_BASE}}"
+                            ],
+                            "path": [
+                                "forecast"
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Forecast with Channel Filter",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "{{CONTENT_TYPE}}"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"sku_id\": \"X_003\",\n    \"warehouse_id\": \"bangalore\",\n    \"horizon\": 14,\n    \"channel_id\": \"Myntra\"\n}"
+                        },
+                        "url": {
+                            "raw": "{{API_BASE}}/forecast",
+                            "host": [
+                                "{{API_BASE}}"
+                            ],
+                            "path": [
+                                "forecast"
+                            ]
+                        }
+                    },
+                    "response": []
+                }
+            ]
+        },
+        {
+            "name": "4. Date Range Filtering",
+            "item": [
+                {
+                    "name": "Forecast with Date Range (2023 data only)",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "{{CONTENT_TYPE}}"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"sku_id\": \"X_003\",\n    \"warehouse_id\": \"bangalore\",\n    \"horizon\": 7,\n    \"start_date\": \"2023-01-01\",\n    \"end_date\": \"2023-12-31\"\n}"
+                        },
+                        "url": {
+                            "raw": "{{API_BASE}}/forecast",
+                            "host": [
+                                "{{API_BASE}}"
+                            ],
+                            "path": [
+                                "forecast"
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Forecast with Recent Data (Last 6 months)",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "{{CONTENT_TYPE}}"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"sku_id\": \"X_003\",\n    \"warehouse_id\": \"bangalore\",\n    \"horizon\": 7,\n    \"start_date\": \"2024-06-01\",\n    \"end_date\": \"2024-12-31\"\n}"
+                        },
+                        "url": {
+                            "raw": "{{API_BASE}}/forecast",
+                            "host": [
+                                "{{API_BASE}}"
+                            ],
+                            "path": [
+                                "forecast"
+                            ]
+                        }
+                    },
+                    "response": []
+                }
+            ]
+        },
+        {
+            "name": "5. Horizon & Parameter Variations",
+            "item": [
+                {
+                    "name": "1-Day Forecast",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "{{CONTENT_TYPE}}"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"sku_id\": \"X_003\",\n    \"warehouse_id\": \"bangalore\",\n    \"horizon\": 1\n}"
+                        },
+                        "url": {
+                            "raw": "{{API_BASE}}/forecast",
+                            "host": [
+                                "{{API_BASE}}"
+                            ],
+                            "path": [
+                                "forecast"
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Maximum Horizon (28 days)",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "{{CONTENT_TYPE}}"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"sku_id\": \"X_003\",\n    \"warehouse_id\": \"bangalore\",\n    \"horizon\": 28\n}"
+                        },
+                        "url": {
+                            "raw": "{{API_BASE}}/forecast",
+                            "host": [
+                                "{{API_BASE}}"
+                            ],
+                            "path": [
+                                "forecast"
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Custom Seasonality (14 days)",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "{{CONTENT_TYPE}}"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"sku_id\": \"X_003\",\n    \"warehouse_id\": \"bangalore\",\n    \"horizon\": 7,\n    \"season\": 14\n}"
+                        },
+                        "url": {
+                            "raw": "{{API_BASE}}/forecast",
+                            "host": [
+                                "{{API_BASE}}"
+                            ],
+                            "path": [
+                                "forecast"
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Reduced Training Period",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "{{CONTENT_TYPE}}"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"sku_id\": \"X_003\",\n    \"warehouse_id\": \"bangalore\",\n    \"horizon\": 7,\n    \"min_train\": 30\n}"
+                        },
+                        "url": {
+                            "raw": "{{API_BASE}}/forecast",
+                            "host": [
+                                "{{API_BASE}}"
+                            ],
+                            "path": [
+                                "forecast"
+                            ]
+                        }
+                    },
+                    "response": []
+                }
+            ]
+        },
+        {
+            "name": "6. Multi-Warehouse Testing",
+            "item": [
+                {
+                    "name": "Forecast for Bangalore",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "{{CONTENT_TYPE}}"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n            \"sku_id\": \"X_003\",\n            \"warehouse_id\": \"bangalore\",\n            \"horizon\": 7\n        }"
+                        },
+                        "url": {
+                            "raw": "{{API_BASE}}/forecast",
+                            "host": [
+                                "{{API_BASE}}"
+                            ],
+                            "path": [
+                                "forecast"
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Forecast for Delhi",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "{{CONTENT_TYPE}}"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n            \"sku_id\": \"X_003\",\n            \"warehouse_id\": \"delhi\",\n            \"horizon\": 7\n        }"
+                        },
+                        "url": {
+                            "raw": "{{API_BASE}}/forecast",
+                            "host": [
+                                "{{API_BASE}}"
+                            ],
+                            "path": [
+                                "forecast"
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Forecast for Mumbai",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "{{CONTENT_TYPE}}"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n            \"sku_id\": \"X_003\",\n            \"warehouse_id\": \"mumbai\",\n            \"horizon\": 7\n        }"
+                        },
+                        "url": {
+                            "raw": "{{API_BASE}}/forecast",
+                            "host": [
+                                "{{API_BASE}}"
+                            ],
+                            "path": [
+                                "forecast"
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Forecast for Chennai",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "{{CONTENT_TYPE}}"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n            \"sku_id\": \"X_003\",\n            \"warehouse_id\": \"chennai\",\n            \"horizon\": 7\n        }"
+                        },
+                        "url": {
+                            "raw": "{{API_BASE}}/forecast",
+                            "host": [
+                                "{{API_BASE}}"
+                            ],
+                            "path": [
+                                "forecast"
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Forecast for Ahmedabad",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "{{CONTENT_TYPE}}"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n            \"sku_id\": \"X_003\",\n            \"warehouse_id\": \"ahmedabad\",\n            \"horizon\": 7\n        }"
+                        },
+                        "url": {
+                            "raw": "{{API_BASE}}/forecast",
+                            "host": [
+                                "{{API_BASE}}"
+                            ],
+                            "path": [
+                                "forecast"
+                            ]
+                        }
+                    },
+                    "response": []
+                }
+            ]
+        },
+        {
+            "name": "7. Batch Forecasting",
+            "item": [
+                {
+                    "name": "Batch Forecast (Multiple Warehouses)",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "{{CONTENT_TYPE}}"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n        \"items\": [\n            {\"sku_id\": \"X_003\", \"warehouse_id\": \"bangalore\"},\n            {\"sku_id\": \"X_003\", \"warehouse_id\": \"delhi\"},\n            {\"sku_id\": \"X_003\", \"warehouse_id\": \"mumbai\"}\n        ],\n        \"horizon\": 7,\n        \"brand\": \"X\"\n    }"
+                        },
+                        "url": {
+                            "raw": "{{API_BASE}}/forecast/batch",
+                            "host": [
+                                "{{API_BASE}}"
+                            ],
+                            "path": [
+                                "forecast",
+                                "batch"
+                            ]
+                        }
+                    },
+                    "response": []
+                }
+            ]
+        },
+        {
+            "name": "8. Error Handling",
+            "item": [
+                {
+                    "name": "Non-existent SKU",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "{{CONTENT_TYPE}}"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n        \"sku_id\": \"NONEXISTENT_SKU\",\n        \"warehouse_id\": \"bangalore\",\n        \"horizon\": 7\n    }"
+                        },
+                        "url": {
+                            "raw": "{{API_BASE}}/forecast",
+                            "host": [
+                                "{{API_BASE}}"
+                            ],
+                            "path": [
+                                "forecast"
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Non-existent Warehouse",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "{{CONTENT_TYPE}}"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n        \"sku_id\": \"X_003\",\n        \"warehouse_id\": \"nonexistent_warehouse\",\n        \"horizon\": 7\n    }"
+                        },
+                        "url": {
+                            "raw": "{{API_BASE}}/forecast",
+                            "host": [
+                                "{{API_BASE}}"
+                            ],
+                            "path": [
+                                "forecast"
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Invalid Horizon (too large)",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "{{CONTENT_TYPE}}"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n        \"sku_id\": \"X_003\",\n        \"warehouse_id\": \"bangalore\",\n        \"horizon\": 100\n    }"
+                        },
+                        "url": {
+                            "raw": "{{API_BASE}}/forecast",
+                            "host": [
+                                "{{API_BASE}}"
+                            ],
+                            "path": [
+                                "forecast"
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Invalid Date Format",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "{{CONTENT_TYPE}}"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n        \"sku_id\": \"X_003\",\n        \"warehouse_id\": \"bangalore\",\n        \"horizon\": 7,\n        \"start_date\": \"invalid-date\"\n    }"
+                        },
+                        "url": {
+                            "raw": "{{API_BASE}}/forecast",
+                            "host": [
+                                "{{API_BASE}}"
+                            ],
+                            "path": [
+                                "forecast"
+                            ]
+                        }
+                    },
+                    "response": []
+                }
+            ]
+        },
+        {
+            "name": "9. Model Validation (3-Year Split)",
+            "item": [
+                {
+                    "name": "Validate X_003@bangalore (2 years train, 1 year test)",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "{{CONTENT_TYPE}}"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n        \"sku_id\": \"X_003\",\n        \"warehouse_id\": \"bangalore\",\n        \"train_end_date\": \"2023-12-31\",\n        \"test_start_date\": \"2024-01-01\",\n        \"test_end_date\": \"2024-12-31\"\n    }"
+                        },
+                        "url": {
+                            "raw": "{{API_BASE}}/validate",
+                            "host": [
+                                "{{API_BASE}}"
+                            ],
+                            "path": [
+                                "validate"
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Validate X_003@delhi (Alternative warehouse)",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "{{CONTENT_TYPE}}"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n        \"sku_id\": \"X_003\",\n        \"warehouse_id\": \"delhi\",\n        \"train_end_date\": \"2023-12-31\",\n        \"test_start_date\": \"2024-01-01\",\n        \"test_end_date\": \"2024-12-31\"\n    }"
+                        },
+                        "url": {
+                            "raw": "{{API_BASE}}/validate",
+                            "host": [
+                                "{{API_BASE}}"
+                            ],
+                            "path": [
+                                "validate"
+                            ]
+                        }
+                    },
+                    "response": []
+                }
+            ]
+        },
+        {
+            "name": "10. Performance Testing",
+            "item": [
+                {
+                    "name": "Performance Test (Single Request)",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "{{CONTENT_TYPE}}"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n        \"sku_id\": \"X_003\",\n        \"warehouse_id\": \"bangalore\",\n        \"horizon\": 7\n    }"
+                        },
+                        "url": {
+                            "raw": "{{API_BASE}}/forecast",
+                            "host": [
+                                "{{API_BASE}}"
+                            ],
+                            "path": [
+                                "forecast"
+                            ]
+                        }
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Final Metrics Check",
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{API_BASE}}/metrics",
+                            "host": [
+                                "{{API_BASE}}"
+                            ],
+                            "path": [
+                                "metrics"
+                            ]
+                        }
+                    },
+                    "response": []
+                }
+            ]
+        }
+    ]
+}
