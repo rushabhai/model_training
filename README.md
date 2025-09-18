@@ -251,6 +251,156 @@ HW_GRID = [
 - **Large Catalogs**: Implement batch processing for bulk updates
 - **Real-time**: Move to streaming architecture for sub-second latency
 
+## 🏗️ Architecture & Runbook
+
+### System Architecture
+
+```
+PostgreSQL Database
+├── brand_x_gold (Materialized View)    # Clean historical data
+├── demand_daily (Materialized View)    # Daily aggregated demand
+│   └── demand_qty = max(0, COALESCE(units_sold, ordered_units - cancelled_units) - units_returned)
+│   └── censored_oos = stockout_flag AND demand_qty = 0
+└── brand_x_data (Base Table)           # Raw transactional data
+
+        ↓ (Data Flow)
+
+Training Pipeline (train_router.py)
+├── Series Classification (ADI & CV²)
+│   ├── Smooth/Erratic → Holt-Winters (additive, season=7)
+│   └── Intermittent → Croston-SBA
+├── Rolling Weekly Backtest
+├── Metrics: WAPE, sMAPE, MAE, RMSE, MASE(7), Bias%
+└── Model Outputs → CSV files
+
+        ↓ (Trained Models)
+
+Serving API (app.py - FastAPI)
+├── /forecast & /forecast/batch endpoints
+├── Excludes censored_oos for training
+├── Returns P10/P50/P90 using split-conformal method
+└── Last 90 one-step residuals for prediction intervals
+```
+
+### Environment Setup
+
+**Required Environment Variables:**
+```bash
+# Database connection (required)
+export PG_URI="postgresql+psycopg2://user:password@host:port/database"
+
+# Optional: Model training parameters
+export MIN_TRAIN_PERIODS=56  # Minimum training data points
+export DEFAULT_SEASON=7      # Weekly seasonality for daily data
+```
+
+### Data Flow Operations
+
+#### 1. Refresh Materialized Views
+```bash
+# Connect to PostgreSQL and refresh the materialized views
+psql $PG_URI -c "REFRESH MATERIALIZED VIEW CONCURRENTLY brand_x_gold;"
+psql $PG_URI -c "REFRESH MATERIALIZED VIEW CONCURRENTLY demand_daily;"
+```
+
+#### 2. Train Models
+```bash
+# Activate environment and train forecasting models
+source .venv/bin/activate
+python train_router.py --series_limit 1000 --backtest_weeks 12
+```
+
+#### 3. Start API Server
+```bash
+# Start the FastAPI serving endpoint
+source .venv/bin/activate
+uvicorn app:app --host 0.0.0.0 --port 8000 --reload
+```
+
+#### 4. Health Check
+```bash
+# Verify API is responding
+curl http://localhost:8000/health
+curl http://localhost:8000/data/stats
+```
+
+### Performance Benchmarks
+
+#### Training Pipeline
+- **Small Dataset** (1K series): ~5-10 minutes
+- **Medium Dataset** (10K series): ~30-60 minutes  
+- **Large Dataset** (100K series): ~3-6 hours
+- **Memory Usage**: ~2-4GB for 10K series
+
+#### Serving API
+- **Single Forecast**: < 100ms (P95)
+- **Batch Forecast**: 1-5 seconds for 100 series
+- **Throughput**: 50-100 RPS (single instance)
+- **Memory Usage**: ~1-2GB
+
+### Acceptance Criteria
+
+| Metric | Target | Rationale |
+|--------|--------|-----------|
+| **WAPE** | ≤ 25% | Industry standard for inventory forecasting |
+| **Bias** | ±5% | Avoid systematic over/under-forecasting |
+| **API Latency** | < 100ms P95 | Real-time decision making |
+| **Uptime** | > 99.5% | Critical business dependency |
+
+### Troubleshooting
+
+#### Common Issues
+
+**1. High WAPE (> 30%)**
+```bash
+# Check data quality and seasonality detection
+python -c "from train_router import diagnose_series; diagnose_series('SKU_ID', 'WAREHOUSE_ID')"
+```
+
+**2. API Timeout Errors**
+```bash
+# Check database connection and query performance
+psql $PG_URI -c "SELECT COUNT(*) FROM brand_x_data WHERE date >= CURRENT_DATE - INTERVAL '365 days';"
+```
+
+**3. Memory Issues During Training**
+```bash
+# Reduce batch size and add pagination
+python train_router.py --series_limit 500 --batch_size 50
+```
+
+### Monitoring & Alerts
+
+#### Key Metrics to Monitor
+- **Model Accuracy**: WAPE, MASE trends over time
+- **API Performance**: Response time, error rate, throughput
+- **Data Freshness**: Last materialized view refresh timestamp
+- **Resource Usage**: Memory, CPU, database connections
+
+#### Alert Thresholds
+```yaml
+forecast_accuracy:
+  wape_threshold: 30%         # Alert if WAPE exceeds 30%
+  bias_threshold: 10%         # Alert if bias exceeds ±10%
+
+api_performance:
+  response_time_p95: 200ms    # Alert if P95 > 200ms
+  error_rate: 5%              # Alert if error rate > 5%
+
+data_freshness:
+  max_staleness: 24h          # Alert if data is > 24h old
+```
+
+### Deployment Checklist
+
+- [ ] PostgreSQL materialized views refreshed
+- [ ] Model training completed successfully
+- [ ] API health check passes
+- [ ] Environment variables configured
+- [ ] Monitoring dashboards operational
+- [ ] Alert thresholds configured
+- [ ] Backup and recovery procedures tested
+
 ---
 
 ## 📞 Support

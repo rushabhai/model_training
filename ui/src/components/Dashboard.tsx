@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Box,
   Grid,
@@ -29,8 +30,8 @@ import ForecastChart from './ForecastChart';
 import RiskDistributionChart from './RiskDistributionChart';
 import TopSeriesTable from './TopSeriesTable';
 import ForecastDialog from './ForecastDialog';
-import { getDashboardData, analyzeDemand } from '../api';
-import { DashboardData, GlobalFilters as GlobalFiltersType, DemandAnalysisResult } from '../types';
+import { getDashboardData } from '../api';
+import { DashboardData, GlobalFilters as GlobalFiltersType } from '../types';
 
 const Dashboard: React.FC = () => {
   const [dashboardData, setDashboardData] = useState<DashboardData | null>(null);
@@ -39,9 +40,6 @@ const Dashboard: React.FC = () => {
   const [filters, setFilters] = useState<GlobalFiltersType>({});
   const [forecastDialogOpen, setForecastDialogOpen] = useState(false);
   const [selectedSeries, setSelectedSeries] = useState<{sku_id: string, warehouse_id: string} | null>(null);
-  const [demandAnalysisOpen, setDemandAnalysisOpen] = useState(false);
-  const [demandAnalysisData, setDemandAnalysisData] = useState<DemandAnalysisResult | null>(null);
-  const [demandAnalysisLoading, setDemandAnalysisLoading] = useState(false);
 
   useEffect(() => {
     loadDashboardData(filters);
@@ -70,22 +68,13 @@ const Dashboard: React.FC = () => {
     setForecastDialogOpen(true);
   };
 
-  const handleCheckDemand = async () => {
-    setDemandAnalysisLoading(true);
-    try {
-      const analysisResult = await analyzeDemand({
-        filters,
-        analysis_horizon_days: 90,
-        include_inventory_optimization: true,
-        include_transfer_recommendations: true
-      });
-      setDemandAnalysisData(analysisResult);
-      setDemandAnalysisOpen(true);
-    } catch (err) {
-      setError('Failed to analyze demand. Please try again.');
-    } finally {
-      setDemandAnalysisLoading(false);
-    }
+  const navigate = useNavigate();
+
+  const handleCheckDemand = () => {
+    // Navigate to demand analysis page with current filters
+    navigate('/demand-analysis', {
+      state: { filters }
+    });
   };
 
   const handleCloseError = () => {
@@ -404,220 +393,6 @@ const Dashboard: React.FC = () => {
         <CircularProgress color="primary" size={60} />
       </Backdrop>
 
-      {/* Demand Analysis Dialog */}
-      <Dialog
-        open={demandAnalysisOpen}
-        onClose={() => setDemandAnalysisOpen(false)}
-        maxWidth="lg"
-        fullWidth
-      >
-        <DialogTitle>
-          <Typography variant="h5" fontWeight={600}>
-            📈 Demand Analysis & Inventory Optimization
-          </Typography>
-        </DialogTitle>
-        <DialogContent>
-          {demandAnalysisData && (
-            <Box>
-              {/* Summary Cards */}
-              <Grid container spacing={2} mb={3}>
-                <Grid item xs={12} sm={6} md={3}>
-                  <Card>
-                    <CardContent>
-                      <Typography variant="h6" color="primary">
-                        {demandAnalysisData.total_forecasted_demand.toFixed(0)}
-                      </Typography>
-                      <Typography variant="body2" color="text.secondary">
-                        Total Forecasted Demand
-                      </Typography>
-                    </CardContent>
-                  </Card>
-                </Grid>
-                <Grid item xs={12} sm={6} md={3}>
-                  <Card>
-                    <CardContent>
-                      <Typography variant="h6" color="secondary">
-                        {demandAnalysisData.execution_summary.high_priority_actions}
-                      </Typography>
-                      <Typography variant="body2" color="text.secondary">
-                        High Priority Actions
-                      </Typography>
-                    </CardContent>
-                  </Card>
-                </Grid>
-                <Grid item xs={12} sm={6} md={3}>
-                  <Card>
-                    <CardContent>
-                      <Typography variant="h6" color="warning.main">
-                        {demandAnalysisData.transfer_recommendations.length}
-                      </Typography>
-                      <Typography variant="body2" color="text.secondary">
-                        Transfer Recommendations
-                      </Typography>
-                    </CardContent>
-                  </Card>
-                </Grid>
-                <Grid item xs={12} sm={6} md={3}>
-                  <Card>
-                    <CardContent>
-                      <Typography variant="h6" color="error.main">
-                        {demandAnalysisData.risk_alerts.length}
-                      </Typography>
-                      <Typography variant="body2" color="text.secondary">
-                        Critical Alerts
-                      </Typography>
-                    </CardContent>
-                  </Card>
-                </Grid>
-              </Grid>
-
-              {/* Inventory Optimization */}
-              <Typography variant="h6" gutterBottom sx={{ mt: 3, mb: 2 }}>
-                🏢 Warehouse Inventory Optimization
-              </Typography>
-              <TableContainer component={Paper} sx={{ mb: 3 }}>
-                <Table size="small">
-                  <TableHead>
-                    <TableRow>
-                      <TableCell>Warehouse</TableCell>
-                      <TableCell align="right">Current Inventory</TableCell>
-                      <TableCell align="right">Recommended</TableCell>
-                      <TableCell align="right">Deficit/Surplus</TableCell>
-                      <TableCell align="center">Action Required</TableCell>
-                      <TableCell align="center">Priority</TableCell>
-                    </TableRow>
-                  </TableHead>
-                  <TableBody>
-                    {demandAnalysisData.inventory_optimization.map((opt) => (
-                      <TableRow key={opt.warehouse_id}>
-                        <TableCell>{opt.warehouse_id}</TableCell>
-                        <TableCell align="right">{opt.current_inventory.toFixed(0)}</TableCell>
-                        <TableCell align="right">{opt.recommended_inventory.toFixed(0)}</TableCell>
-                        <TableCell align="right">
-                          <Typography
-                            color={opt.deficit_surplus < 0 ? 'error' : 'success.main'}
-                            fontWeight={600}
-                          >
-                            {opt.deficit_surplus > 0 ? '+' : ''}{opt.deficit_surplus.toFixed(0)}
-                          </Typography>
-                        </TableCell>
-                        <TableCell align="center">
-                          <Chip
-                            label={opt.action_required}
-                            size="small"
-                            color={
-                              opt.action_required === 'RESTOCK' ? 'error' :
-                              opt.action_required === 'TRANSFER_IN' ? 'warning' :
-                              opt.action_required === 'TRANSFER_OUT' ? 'info' : 'success'
-                            }
-                          />
-                        </TableCell>
-                        <TableCell align="center">
-                          <Chip
-                            label={opt.priority_level}
-                            size="small"
-                            variant="outlined"
-                            color={
-                              opt.priority_level === 'HIGH' ? 'error' :
-                              opt.priority_level === 'MEDIUM' ? 'warning' : 'default'
-                            }
-                          />
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </TableContainer>
-
-              {/* Transfer Recommendations */}
-              {demandAnalysisData.transfer_recommendations.length > 0 && (
-                <>
-                  <Typography variant="h6" gutterBottom sx={{ mt: 3, mb: 2 }}>
-                    🚚 Transfer Recommendations
-                  </Typography>
-                  <TableContainer component={Paper} sx={{ mb: 3 }}>
-                    <Table size="small">
-                      <TableHead>
-                        <TableRow>
-                          <TableCell>From</TableCell>
-                          <TableCell>To</TableCell>
-                          <TableCell>SKU</TableCell>
-                          <TableCell align="right">Quantity</TableCell>
-                          <TableCell align="center">Urgency</TableCell>
-                          <TableCell>Reason</TableCell>
-                        </TableRow>
-                      </TableHead>
-                      <TableBody>
-                        {demandAnalysisData.transfer_recommendations.slice(0, 5).map((rec, index) => (
-                          <TableRow key={index}>
-                            <TableCell>{rec.from_warehouse}</TableCell>
-                            <TableCell>{rec.to_warehouse}</TableCell>
-                            <TableCell>{rec.sku_id}</TableCell>
-                            <TableCell align="right">{rec.recommended_quantity.toFixed(0)}</TableCell>
-                            <TableCell align="center">
-                              <Chip
-                                label={rec.urgency}
-                                size="small"
-                                color={
-                                  rec.urgency === 'HIGH' ? 'error' :
-                                  rec.urgency === 'MEDIUM' ? 'warning' : 'default'
-                                }
-                              />
-                            </TableCell>
-                            <TableCell>{rec.reason}</TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </TableContainer>
-                </>
-              )}
-
-              {/* Financial Impact */}
-              <Typography variant="h6" gutterBottom sx={{ mt: 3, mb: 2 }}>
-                💰 Financial Impact Analysis
-              </Typography>
-              <Grid container spacing={2}>
-                <Grid item xs={12} sm={6}>
-                  <Card sx={{ bgcolor: 'error.light', color: 'error.contrastText' }}>
-                    <CardContent>
-                      <Typography variant="h6">
-                        ₹{demandAnalysisData.financial_impact.potential_lost_sales_value?.toFixed(0) || '0'}
-                      </Typography>
-                      <Typography variant="body2">
-                        Potential Lost Sales Value
-                      </Typography>
-                    </CardContent>
-                  </Card>
-                </Grid>
-                <Grid item xs={12} sm={6}>
-                  <Card sx={{ bgcolor: 'success.light', color: 'success.contrastText' }}>
-                    <CardContent>
-                      <Typography variant="h6">
-                        ₹{demandAnalysisData.financial_impact.potential_holding_cost_savings?.toFixed(0) || '0'}
-                      </Typography>
-                      <Typography variant="body2">
-                        Potential Savings
-                      </Typography>
-                    </CardContent>
-                  </Card>
-                </Grid>
-              </Grid>
-            </Box>
-          )}
-          
-          {demandAnalysisLoading && (
-            <Box display="flex" justifyContent="center" p={4}>
-              <CircularProgress />
-            </Box>
-          )}
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setDemandAnalysisOpen(false)} variant="outlined">
-            Close
-          </Button>
-        </DialogActions>
-      </Dialog>
 
       {/* Error Snackbar */}
       <Snackbar 

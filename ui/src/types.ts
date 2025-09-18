@@ -196,14 +196,43 @@ export interface DemandAnalysisRequest {
   include_transfer_recommendations?: boolean;
 }
 
-export interface InventoryOptimization {
+export interface WarehouseInventoryData {
   warehouse_id: string;
   current_inventory: number;
-  recommended_inventory: number;
   deficit_surplus: number;
-  action_required: string;
-  priority_level: string;
   estimated_stockout_date?: string;
+}
+
+export interface RiskAlert {
+  type: string;
+  warehouse_id?: string; // Still useful for single, unconsolidated alerts
+  deficit?: number;
+  surplus?: number;
+  estimated_impact: number;
+  action_deadline: string;
+  urgency: string;
+  message: string;
+  warehouses?: Array<{ // For consolidated alerts
+    warehouse_id: string;
+    deficit?: number;
+    surplus?: number;
+    estimated_impact: number;
+    action_deadline: string;
+    urgency: string;
+    message: string;
+  }>;
+}
+
+export interface SkuDemandAnalysis {
+  sku_id: string;
+  product_category: string;
+  warehouses: WarehouseInventoryData[];
+  total_sku_current_inventory: number;
+  total_sku_forecasted_demand: number;
+  overall_deficit_surplus: number;
+  overall_action_required: string;
+  overall_priority_level: string;
+  risk_alerts: RiskAlert[];
 }
 
 export interface TransferRecommendation {
@@ -222,9 +251,16 @@ export interface DemandAnalysisResult {
   demand_by_warehouse: Record<string, number>;
   demand_by_category: Record<string, number>;
   seasonal_insights: Record<string, any>;
-  inventory_optimization: InventoryOptimization[];
+  sku_analysis: Record<string, SkuDemandAnalysis>;
   transfer_recommendations: TransferRecommendation[];
-  risk_alerts: Array<Record<string, any>>;
+  risk_alerts: RiskAlert[];
   financial_impact: Record<string, number>;
   execution_summary: Record<string, any>;
+  sku_summary: {
+    total_skus: number;
+    high_risk_skus: number;
+    medium_risk_skus: number;
+    low_risk_skus: number;
+    surplus_skus: number;
+  };
 }
