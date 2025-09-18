@@ -253,99 +253,154 @@ HW_GRID = [
 
 ## 🏗️ Architecture & Runbook
 
-### System Architecture
+This section details the system's architecture, data flow, operational procedures, and monitoring guidelines.
 
-```
-PostgreSQL Database
-├── brand_x_gold (Materialized View)    # Clean historical data
-├── demand_daily (Materialized View)    # Daily aggregated demand
-│   └── demand_qty = max(0, COALESCE(units_sold, ordered_units - cancelled_units) - units_returned)
-│   └── censored_oos = stockout_flag AND demand_qty = 0
-└── brand_x_data (Base Table)           # Raw transactional data
+### 1. System Architecture & Data Flow
 
-        ↓ (Data Flow)
-
-Training Pipeline (train_router.py)
-├── Series Classification (ADI & CV²)
-│   ├── Smooth/Erratic → Holt-Winters (additive, season=7)
-│   └── Intermittent → Croston-SBA
-├── Rolling Weekly Backtest
-├── Metrics: WAPE, sMAPE, MAE, RMSE, MASE(7), Bias%
-└── Model Outputs → CSV files
-
-        ↓ (Trained Models)
-
-Serving API (app.py - FastAPI)
-├── /forecast & /forecast/batch endpoints
-├── Excludes censored_oos for training
-├── Returns P10/P50/P90 using split-conformal method
-└── Last 90 one-step residuals for prediction intervals
+```mermaid
+graph TD
+    A[Brand X Raw Data (PostgreSQL)] --> B{Data Transformation & Feature Engineering}
+    B --> C1[Materialized View: brand_x_gold] --> D1[Materialized View: demand_daily]
+    B --> C2[Materialized View: product_metadata]
+    D1 --> E[ML Training Pipeline (train_router.py)]
+    E -- Models & Metrics --> F[FastAPI Serving API (app.py)]
+    F -- Forecasts & Insights --> G[React Frontend UI]
+    G -- User Filters & Requests --> F
 ```
 
-### Environment Setup
+**Data Flow Description:**
 
-**Required Environment Variables:**
+1.  **Brand X Raw Data**: Raw transactional and inventory data from the PostgreSQL database (`brand_x_data` table).
+2.  **Data Transformation & Feature Engineering**: Raw data is processed and enriched. This involves:
+    *   Creating a leakage-safe demand proxy (`demand_qty`).
+    *   Identifying `censored_oos` (stockout days hiding demand).
+    *   Adding calendar features, pricing indexes, etc.
+3.  **Materialized Views**: Optimized views for performance and data consistency:
+    *   `brand_x_gold`: Contains cleaned, feature-engineered historical data.
+    *   `demand_daily`: A slim, modeling-ready slice of `brand_x_gold` used by the ML trainer.
+    *   `product_metadata`: (Implicit, for additional product attributes if used for filtering/grouping).
+4.  **ML Training Pipeline (`train_router.py`)**: This Python script:
+    *   Fetches data from `demand_daily`.
+    *   Classifies each SKU series by **ADI (Average Demand Interval)** and **CV² (Coefficient of Variation squared)** into SMOOTH, ERRATIC, or INTERMITTENT categories.
+    *   Selects appropriate model: Holt-Winters (for SMOOTH/ERRATIC) or Croston-SBA (for INTERMITTENT).
+    *   Trains models using a rolling-origin backtest strategy.
+    *   Outputs model metrics (WAPE, MAPE, MAE, Bias%) and trained model parameters.
+5.  **FastAPI Serving API (`app.py`)**: The core backend service:
+    *   Receives requests from the UI (dashboard, forecast, demand analysis, validation).
+    *   Loads pre-trained model parameters or performs lightweight on-demand fitting.
+    *   Applies seasonal adjustments, holiday impacts, and demand volatility factors.
+    *   Generates probabilistic forecasts (P10, P50, P90) using Split-Conformal methods.
+    *   Calculates various KPIs, performs inventory optimization, and generates risk alerts.
+6.  **React Frontend UI**: The user-facing application:
+    *   Provides interactive dashboards and visualizations.
+    *   Allows global filtering for SKU, warehouse, category, and date ranges.
+    *   Displays KPIs, top series, risk distribution, and demand analysis results.
+    *   Triggers API calls for data retrieval and model validation.
+
+### 2. Runbook: Operational Commands
+
+#### 2.1. Environment Variables
+
+Ensure the following environment variable is set before running any backend or training scripts:
+
 ```bash
-# Database connection (required)
-export PG_URI="postgresql+psycopg2://user:password@host:port/database"
-
-# Optional: Model training parameters
-export MIN_TRAIN_PERIODS=56  # Minimum training data points
-export DEFAULT_SEASON=7      # Weekly seasonality for daily data
+export PG_URI='postgresql+psycopg2://<YOUR_USER>:<YOUR_PASSWORD>@<YOUR_HOST>:5432/<YOUR_DATABASE>'
+# Note: It's recommended to use a read-only database user for the application.
 ```
 
-### Data Flow Operations
+#### 2.2. Refresh Materialized Views
 
-#### 1. Refresh Materialized Views
+Materialized views (`brand_x_gold` and `demand_daily`) should be refreshed periodically to incorporate new data. It is crucial to refresh them in the correct order.
+
 ```bash
-# Connect to PostgreSQL and refresh the materialized views
+# Navigate to the project root if not already there
+cd /path/to/stacklogix
+
+# Activate your Python virtual environment (if using)
+source .venv/bin/activate
+
+# Refresh brand_x_gold (must be refreshed first)
 psql $PG_URI -c "REFRESH MATERIALIZED VIEW CONCURRENTLY brand_x_gold;"
+
+# Refresh demand_daily (depends on brand_x_gold)
 psql $PG_URI -c "REFRESH MATERIALIZED VIEW CONCURRENTLY demand_daily;"
+
+echo "✅ Materialized views refreshed successfully."
 ```
 
-#### 2. Train Models
+#### 2.3. Train Forecasting Models
+
+The `train_router.py` script trains the ML models. It can be run after refreshing the materialized views.
+
 ```bash
-# Activate environment and train forecasting models
+# Navigate to the project root if not already there
+cd /path/to/stacklogix
+
+# Activate your Python virtual environment
 source .venv/bin/activate
-python train_router.py --series_limit 1000 --backtest_weeks 12
+
+# Run the training script (adjust parameters as needed)
+python train_router.py \
+  --db "$PG_URI" \
+  --start_date 2022-01-01 \
+  --end_date 2024-12-31 \
+  --min_points 180 \
+  --min_train 56 \
+  --series_limit 5000 \
+  --horizon 7 \
+  --outdir ./outputs
+
+echo "✅ Forecasting models trained. Outputs saved to ./outputs/."
 ```
 
-#### 3. Start API Server
+#### 2.4. Serve FastAPI Backend
+
+Start the FastAPI application. This will serve the API endpoints for the UI and other consumers.
+
 ```bash
-# Start the FastAPI serving endpoint
+# Navigate to the project root if not already there
+cd /path/to/stacklogix
+
+# Activate your Python virtual environment
 source .venv/bin/activate
-uvicorn app:app --host 0.0.0.0 --port 8000 --reload
+
+# Start the Uvicorn server
+uvicorn app:app --host 0.0.0.0 --port 8001 --reload
+
+echo "✅ FastAPI backend running on http://0.0.0.0:8001."
 ```
 
-#### 4. Health Check
+#### 2.5. Run React Frontend
+
+Start the React development server for the UI.
+
 ```bash
-# Verify API is responding
-curl http://localhost:8000/health
-curl http://localhost:8000/data/stats
+# Navigate to the UI directory
+cd /path/to/stacklogix/ui
+
+# Install dependencies (if not already done)
+npm install
+
+# Start the development server
+npm start
+
+echo "✅ React frontend running on http://localhost:3000."
 ```
 
-### Performance Benchmarks
+### 3. Acceptance Metrics
 
-#### Training Pipeline
-- **Small Dataset** (1K series): ~5-10 minutes
-- **Medium Dataset** (10K series): ~30-60 minutes  
-- **Large Dataset** (100K series): ~3-6 hours
-- **Memory Usage**: ~2-4GB for 10K series
-
-#### Serving API
-- **Single Forecast**: < 100ms (P95)
-- **Batch Forecast**: 1-5 seconds for 100 series
-- **Throughput**: 50-100 RPS (single instance)
-- **Memory Usage**: ~1-2GB
-
-### Acceptance Criteria
+Monitoring these metrics is crucial to ensure the system is performing as expected.
 
 | Metric | Target | Rationale |
-|--------|--------|-----------|
-| **WAPE** | ≤ 25% | Industry standard for inventory forecasting |
-| **Bias** | ±5% | Avoid systematic over/under-forecasting |
-| **API Latency** | < 100ms P95 | Real-time decision making |
-| **Uptime** | > 99.5% | Critical business dependency |
+|---|---|---|
+| **WAPE (Overall)** | ≤ 25% | Industry benchmark for accurate inventory forecasting; ensures aggregate demand predictability. |
+| **Bias (Overall)** | ±5% | Critical to avoid systematic overstocking or stockouts; indicates unbiased forecasts. |
+| **API Latency (P95 /dashboard)** | < 1000ms | Ensures a responsive user experience for dashboard loading. |
+| **API Latency (P95 /demand/analysis)** | < 2000ms | Allows for timely detailed inventory insights, even with complex calculations. |
+| **Model FVA** | > 10% | Demonstrates the value added by the ML model over a simple baseline; justifies model complexity. |
+| **Prediction Interval Coverage (80%)** | 75-85% | Validates the reliability of safety stock recommendations and probabilistic forecasts. |
+| **Database MV Freshness** | < 24 hours | Ensures forecasts are based on the most recent available inventory and sales data. |
+| **Service Level (Critical SKUs)** | > 95% | Guarantees high availability for top-tier products, minimizing lost sales. |
 
 ### Troubleshooting
 

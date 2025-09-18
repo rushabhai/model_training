@@ -8,7 +8,7 @@ from typing import Optional, List, Dict, Any, Tuple
 
 import numpy as np
 import pandas as pd
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Body
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, constr, conint
 from sqlalchemy import create_engine, text
@@ -81,6 +81,18 @@ class ForecastPoint(BaseModel):
     p90: float
 
 class ForecastResponse(BaseModel):
+    sku_id: str
+    warehouse_id: str
+    model: str
+    bucket: str
+    history_days: int
+    train_days: int
+    horizon: int
+    start_history: date
+    end_history: date
+    forecasts: List[ForecastPoint]
+
+class ForecastResult(BaseModel):
     sku_id: str
     warehouse_id: str
     model: str
@@ -596,25 +608,51 @@ def health() -> Dict[str, Any]:
         "uptime_seconds": time.time() - start_time
     }
 
-@app.post(
-    "/forecast", 
-    response_model=ForecastResponse,
-    summary="Generate demand forecast for a specific SKU-warehouse combination",
+@app.post("/forecast", response_model=ForecastResult,
+    summary="Generate Single SKU Demand Forecast",
     description="""
-    **Generate probabilistic demand forecasts for inventory planning**
+    **Provides a probabilistic demand forecast for a single SKU at a specific warehouse.**
     
-    This endpoint provides point forecasts and prediction intervals for a specific SKU at a warehouse.
-    The model automatically selects the optimal algorithm based on demand characteristics:
+    This endpoint utilizes an intelligent routing model (Holt-Winters for smooth/erratic demand,
+    Croston-SBA for intermittent demand) to generate a forecast for a specified horizon.
+    Prediction intervals (P10, P50, P90) are calculated using a split-conformal method.
     
-    - **ADI ≤ 1.32**: Uses Holt-Winters additive with weekly seasonality
-    - **ADI > 1.32**: Uses Croston-SBA for intermittent demand
-    
-    **Returns**: P10/P50/P90 quantiles using split-conformal prediction intervals
+    **Key Features:**
+    - **Adaptive Model Selection**: Automatically chooses the best model based on demand patterns.
+    - **Probabilistic Forecasts**: Provides a range (P10-P90) for better safety stock planning.
+    - **Configurable Horizon**: Adjust forecast length from 1 to 28 days.
+    - **Exclusion of Stockouts**: Optionally exclude censored out-of-stock periods from training data
+      to improve forecast accuracy.
+    - **Seasonal Adjustments**: Incorporates weekly seasonality by default.
     """,
-    response_description="Forecast response with point estimates and prediction intervals",
-    tags=["Forecasting"]
+    response_description="A ForecastResult object containing the SKU and warehouse IDs, the selected model, demand bucket, historical data days, training days, forecast horizon, and a list of daily forecasts with P10, P50, and P90 values.",
+    tags=["Forecasting", "Single SKU"]
 )
-def forecast(req: ForecastRequest) -> ForecastResponse:
+def get_single_forecast(req: ForecastRequest = Body(..., 
+    examples=[
+        {
+            "sku_id": "X_003",
+            "warehouse_id": "bangalore",
+            "horizon": 7,
+            "brand": "X",
+            "channel_id": "Myntra",
+            "product_category": "Premium_Apparel",
+            "start_date": "2024-01-01",
+            "end_date": "2024-12-31",
+            "season": 7,
+            "min_train": 56,
+            "exclude_censored_for_train": True
+        },
+        {
+            "sku_id": "X_005",
+            "warehouse_id": "delhi",
+            "horizon": 14,
+            "product_category": "Limited_Edition",
+            "exclude_censored_for_train": False
+        }
+    ],
+    description="Request parameters for generating a single SKU demand forecast."
+)) -> ForecastResult:
     df = _fetch_series(req.sku_id, req.warehouse_id, req)
     if df.empty:
         raise HTTPException(status_code=404, detail="Series not found or no history for given filters.")
@@ -649,7 +687,7 @@ def forecast(req: ForecastRequest) -> ForecastResponse:
     # Update metrics
     request_metrics["forecasts_generated"] += len(points)
 
-    return ForecastResponse(
+    return ForecastResult(
         sku_id=req.sku_id,
         warehouse_id=req.warehouse_id,
         model=model_name,
@@ -662,8 +700,49 @@ def forecast(req: ForecastRequest) -> ForecastResponse:
         forecasts=points
     )
 
-@app.post("/forecast/batch")
-def forecast_batch(req: BatchForecastRequest) -> Dict[str, Any]:
+@app.post("/forecast/batch", response_model=List[ForecastResult],
+    summary="Generate Batch SKU Demand Forecasts",
+    description="""
+    **Generates probabilistic demand forecasts for multiple SKUs and warehouses in a single request.**
+    
+    This endpoint is optimized for efficiency when forecasting demand for a list of products.
+    It applies the same intelligent routing model (Holt-Winters or Croston-SBA) and split-conformal
+    prediction intervals (P10, P50, P90) as the single `/forecast` endpoint.
+    
+    **Key Features:**
+    - **Bulk Forecasting**: Process multiple SKU-warehouse combinations efficiently.
+    - **Consistent Parameters**: Apply a single set of forecast parameters (horizon, seasonality, etc.)
+      across all requested series.
+    - **Error Handling**: Gracefully handles individual series failures without interrupting the entire batch.
+    - **Optimized Performance**: Designed for scenarios requiring forecasts for a subset or entire product catalog.
+    """,
+    response_description="A list of ForecastResult objects, each containing the forecast details for a requested SKU-warehouse combination. If a forecast fails for a specific series, an error will be included in its result.",
+    tags=["Forecasting", "Batch"]
+)
+def get_batch_forecast(req: BatchForecastRequest = Body(...,
+    examples=[
+        {
+            "items": [
+                {"sku_id": "X_003", "warehouse_id": "bangalore"},
+                {"sku_id": "X_005", "warehouse_id": "delhi"},
+                {"sku_id": "X_010", "warehouse_id": "pune", "product_category": "Casual_Wear"}
+            ],
+            "horizon": 7,
+            "brand": "X",
+            "exclude_censored_for_train": True
+        },
+        {
+            "items": [
+                {"sku_id": "X_020", "warehouse_id": "mumbai"},
+                {"sku_id": "X_022", "warehouse_id": "chennai"}
+            ],
+            "horizon": 14,
+            "start_date": "2024-01-01",
+            "end_date": "2024-06-30"
+        }
+    ],
+    description="Request parameters for generating batch SKU demand forecasts."
+)) -> List[ForecastResult]:
     out = {"results": [], "errors": []}
     for item in req.items:
         single_req = ForecastRequest(
@@ -722,8 +801,47 @@ def get_metrics() -> MonitoringMetrics:
         memory_usage_mb=memory_usage
     )
 
-@app.post("/validate", response_model=ValidationResult)
-def validate_model(req: ValidationRequest) -> ValidationResult:
+@app.post("/validate", response_model=ValidationResult,
+    summary="Validate Single SKU Model Performance",
+    description="""
+    **Evaluates the forecasting model's accuracy for a single SKU against historical data.**
+    
+    This endpoint performs a backtesting validation process, splitting historical data into
+    training and testing periods to measure various accuracy metrics (WAPE, MAPE, MAE, RMSE, Bias%)
+    and prediction interval coverage.
+    
+    **Key Features:**
+    - **Backtesting Validation**: Simulates real-world forecasting by training on past data and testing on future data.
+    - **Comprehensive Metrics**: Provides a wide range of accuracy and coverage metrics for thorough evaluation.
+    - **Configurable Periods**: Define flexible training and testing date ranges.
+    - **Model Insights**: Returns the selected model (Holt-Winters or Croston-SBA) and demand bucket.
+    - **Exclusion of Stockouts**: Optionally excludes censored out-of-stock periods from training.
+    """,
+    response_description="A ValidationResult object containing SKU and warehouse IDs, model details, training/testing period dates and durations, a comprehensive set of accuracy metrics, and prediction interval coverage statistics.",
+    tags=["Validation", "Model Performance"]
+)
+def validate_model(req: ValidationRequest = Body(...,
+    examples=[
+        {
+            "sku_id": "X_003",
+            "warehouse_id": "bangalore",
+            "train_end_date": "2024-06-30",
+            "test_start_date": "2024-07-01",
+            "test_end_date": "2024-07-31",
+            "season": 7,
+            "min_train": 56,
+            "exclude_censored_for_train": True
+        },
+        {
+            "sku_id": "X_005",
+            "warehouse_id": "delhi",
+            "train_end_date": "2024-09-30",
+            "test_start_date": "2024-10-01",
+            "test_end_date": "2024-10-31"
+        }
+    ],
+    description="Request parameters for validating a single SKU demand forecast model."
+)) -> ValidationResult:
     """Validate model performance on historical data"""
     
     # Fetch training data (before train_end_date)
@@ -931,7 +1049,7 @@ def get_data_stats() -> Dict[str, Any]:
         }
     }
 
-def _calculate_seasonal_factors(filters: GlobalFilters) -> Dict[str, float]:
+def _calculate_seasonal_factors(filters: GlobalFilters, calculation_start_date: Optional[date] = None, calculation_end_date: Optional[date] = None) -> Dict[str, Any]:
     """Calculate seasonal adjustment factors and holiday impacts"""
     import calendar
     from datetime import datetime, timedelta
@@ -964,40 +1082,74 @@ def _calculate_seasonal_factors(filters: GlobalFilters) -> Dict[str, float]:
         12: 1.10   # December - Christmas, year-end
     }
     
-    current_date = datetime.now()
-    current_month = current_date.month
-    
-    # Calculate next quarter
-    if current_month <= 3:
-        next_quarter_months = [4, 5, 6]
-        next_quarter = 2
-    elif current_month <= 6:
-        next_quarter_months = [7, 8, 9]
-        next_quarter = 3
-    elif current_month <= 9:
-        next_quarter_months = [10, 11, 12]
-        next_quarter = 4
-    else:
-        next_quarter_months = [1, 2, 3]
-        next_quarter = 1
-    
-    # Average seasonal factor for next quarter
-    avg_seasonal_factor = sum(seasonal_multipliers[m] for m in next_quarter_months) / 3
-    
+    # Determine relevant months for calculation
+    if calculation_start_date and calculation_end_date:
+        relevant_months = []
+        current_iter_date = calculation_start_date
+        while current_iter_date <= calculation_end_date:
+            if current_iter_date.month not in relevant_months:
+                relevant_months.append(current_iter_date.month)
+            current_iter_date += timedelta(days=1)
+        
+        if not relevant_months:
+            # Fallback if date range is empty
+            relevant_months = [datetime.now().month] 
+        
+        # Calculate average seasonal factor for the relevant period
+        avg_seasonal_factor = sum(seasonal_multipliers[m] for m in relevant_months) / len(relevant_months)
+        
+        # Determine current quarter for holiday impact based on calculation_start_date
+        start_month_for_quarter = calculation_start_date.month
+        if start_month_for_quarter <= 3:
+            current_quarter = 1
+        elif start_month_for_quarter <= 6:
+            current_quarter = 2
+        elif start_month_for_quarter <= 9:
+            current_quarter = 3
+        else:
+            current_quarter = 4
+        
+        next_quarter_val = current_quarter # For consistency, use the calculated quarter as 'next_quarter'
+        next_quarter_months_list = []
+        if next_quarter_val == 1: next_quarter_months_list = [1,2,3]
+        elif next_quarter_val == 2: next_quarter_months_list = [4,5,6]
+        elif next_quarter_val == 3: next_quarter_months_list = [7,8,9]
+        elif next_quarter_val == 4: next_quarter_months_list = [10,11,12]
+
+    else: # Default behavior using current date
+        current_date = datetime.now()
+        current_month = current_date.month
+        
+        if current_month <= 3:
+            next_quarter_months_list = [4, 5, 6]
+            next_quarter_val = 2
+        elif current_month <= 6:
+            next_quarter_months_list = [7, 8, 9]
+            next_quarter_val = 3
+        elif current_month <= 9:
+            next_quarter_months_list = [10, 11, 12]
+            next_quarter_val = 4
+        else:
+            next_quarter_months_list = [1, 2, 3]
+            next_quarter_val = 1
+        
+        avg_seasonal_factor = sum(seasonal_multipliers[m] for m in next_quarter_months_list) / 3
+        relevant_months = next_quarter_months_list # For holiday calculation below
+
     # Holiday impact calculation
     holiday_impact = 0.0
     festive_uplift = 0.0
     
     if filters.include_holidays:
         for holiday, date_ranges in indian_holidays.items():
-            for start_month, start_day in date_ranges:
-                if isinstance(start_day, tuple):  # Handle range
-                    end_month, end_day = start_day
+            for start_month, start_day_or_tuple in date_ranges:
+                if isinstance(start_day_or_tuple, tuple):  # Handle range
+                    end_month, end_day = start_day_or_tuple
                 else:
-                    end_month, end_day = start_month, start_day + 10
-                
-                # Check if next quarter overlaps with holiday
-                for month in next_quarter_months:
+                    end_month, end_day = start_month, start_day_or_tuple # Corrected, assuming end_day is same if not tuple
+
+                # Check if relevant_months overlaps with holiday
+                for month in relevant_months:
                     if start_month <= month <= end_month:
                         if holiday in ['diwali', 'dussehra', 'navratri']:
                             festive_uplift += 0.15  # 15% uplift for major festivals
@@ -1007,18 +1159,18 @@ def _calculate_seasonal_factors(filters: GlobalFilters) -> Dict[str, float]:
                             festive_uplift += 0.05  # 5% uplift for other holidays
                         
                         holiday_impact += 0.03  # Base 3% impact per holiday
-    
+
     # Demand volatility index (based on seasonal variation)
-    seasonal_std = sum((seasonal_multipliers[m] - 1.0) ** 2 for m in range(1, 13)) / 12
+    seasonal_std = sum((seasonal_multipliers[m] - 1.0) ** 2 for m in relevant_months) / len(relevant_months) # Use relevant_months
     volatility_index = min(seasonal_std * 100, 50.0)  # Cap at 50%
-    
+
     return {
         'seasonal_adjustment_factor': avg_seasonal_factor,
         'holiday_impact_pct': min(holiday_impact * 100, 20.0),  # Cap at 20%
         'festive_season_uplift': min(festive_uplift * 100, 30.0),  # Cap at 30%
         'demand_volatility_index': volatility_index,
-        'next_quarter': next_quarter,
-        'next_quarter_months': next_quarter_months
+        'next_quarter': next_quarter_val,
+        'next_quarter_months': next_quarter_months_list
     }
 
 def _apply_temporal_aggregation(sql: str, filters: GlobalFilters) -> str:
@@ -1069,8 +1221,51 @@ def _build_global_filters(filters: GlobalFilters) -> Tuple[str, Dict[str, Any]]:
     where_clause = " AND ".join(conditions) if conditions else "1=1"
     return where_clause, params
 
-@app.post("/dashboard", response_model=DashboardData)
-def get_dashboard_data(filters: GlobalFilters) -> DashboardData:
+@app.post("/dashboard", response_model=DashboardData,
+    summary="Retrieve Comprehensive Inventory Dashboard Data",
+    description="""
+    **Provides a holistic overview of Brand X's inventory performance.**
+    
+    This endpoint aggregates key performance indicators (KPIs), top-performing product series,
+    risk distribution, and forecast accuracy trends based on selected global filters.
+    
+    **Key Features:**
+    - **Real-time KPI Monitoring**: Get immediate insights into inventory health.
+    - **Top Series Identification**: Pinpoint best-selling products by demand and revenue.
+    - **Risk Visualization**: Understand inventory risk profiles across the catalog.
+    - **Forecast Accuracy Tracking**: Monitor model performance over time.
+    - **Temporal Aggregation**: View data aggregated by daily, weekly, monthly, or quarterly periods.
+    - **Seasonal Analysis**: Incorporate holiday and festive season impacts into forecasts.
+    - **Next Quarter Forecast**: Project demand for the upcoming quarter for strategic planning.
+    
+    **Filter Application**: All metrics and data points are dynamically adjusted based on the
+    `GlobalFilters` provided in the request body, allowing for granular analysis by brand,
+    warehouse, product category, and specific date ranges.
+    """,
+    response_description="A DashboardData object containing aggregated KPIs, top series data, risk distribution, forecast accuracy trends, inventory levels, and API response time.",
+    tags=["Dashboard", "KPIs", "Analytics"]
+)
+def get_dashboard_data(filters: GlobalFilters = Body(..., 
+    examples=[
+        {
+            "brand": "X",
+            "warehouse_id": "mumbai",
+            "product_category": "Premium_Apparel",
+            "start_date": "2024-01-01",
+            "end_date": "2024-12-31",
+            "time_aggregation": "monthly",
+            "include_holidays": True,
+            "forecast_next_quarter": True
+        },
+        {
+            "start_date": "2024-07-01",
+            "end_date": "2024-09-30",
+            "time_aggregation": "quarterly",
+            "include_holidays": False
+        }
+    ],
+    description="Global filters to apply for dashboard data aggregation."
+)) -> DashboardData:
     """Get comprehensive dashboard data with KPIs and metrics"""
     import time
     start_time = time.time()
@@ -1416,8 +1611,46 @@ class QuarterlyValidationResult(BaseModel):
     series_results: List[Dict[str, Any]]
     summary: Dict[str, Any]
 
-@app.post("/validate/quarterly", response_model=QuarterlyValidationResult)
-def validate_quarterly_forecast(req: QuarterlyValidationRequest) -> QuarterlyValidationResult:
+@app.post("/validate/quarterly", response_model=QuarterlyValidationResult,
+    summary="Perform Quarterly Model Validation (3 Quarters Train, 1 Quarter Test)",
+    description="""
+    **Executes a robust quarterly validation process to assess model performance over different periods.**
+    
+    This endpoint allows you to specify a `test_quarter` for a given `year`,
+    and the model will be trained on the remaining three quarters of that year, then evaluated
+    against the chosen test quarter. This provides a realistic assessment of out-of-sample performance
+    and helps identify model drift or seasonal weaknesses.
+    
+    **Key Features:**
+    - **Time-Series Cross-Validation**: Mimics real-world deployment by testing on unseen future data.
+    - **Comprehensive Evaluation**: Returns overall and per-series accuracy metrics (WAPE, MAPE, MAE, Bias%)
+      and prediction interval coverage.
+    - **Configurable Scope**: Specify `top_n_series` to focus validation on the most critical products.
+    - **Seasonal Performance Insights**: Helps evaluate how well the model performs during specific seasonal cycles.
+    - **Global Filter Application**: Filters can be applied to narrow down the scope of SKUs and warehouses for validation.
+    """,
+    response_description="A QuarterlyValidationResult object, including the training and testing periods, the number of series tested and failed, overall average accuracy metrics, and detailed results for each validated series.",
+    tags=["Validation", "Quarterly Analysis"]
+)
+def validate_quarterly_forecast(req: QuarterlyValidationRequest = Body(...,
+    examples=[
+        {
+            "year": 2024,
+            "test_quarter": 4, # Test Q4 2024, train on Q1-Q3 2024
+            "filters": {
+                "product_categories": ["Premium_Apparel"],
+                "warehouse_ids": ["mumbai", "delhi"]
+            },
+            "top_n_series": 10
+        },
+        {
+            "year": 2023,
+            "test_quarter": 1, # Test Q1 2023, train on Q2-Q4 2023
+            "top_n_series": 5
+        }
+    ],
+    description="Request parameters for performing quarterly model validation."
+)) -> QuarterlyValidationResult:
     """Validate model performance using 3 quarters training vs 1 quarter testing"""
     import time
     start_time = time.time()
@@ -1437,14 +1670,17 @@ def validate_quarterly_forecast(req: QuarterlyValidationRequest) -> QuarterlyVal
     # Training period: All quarters except test quarter
     train_quarters = [q for q in [1, 2, 3, 4] if q != req.test_quarter]
     
+    # Determine overall training period start and end dates
+    training_start_date = date.fromisoformat(quarters[min(train_quarters)]["start"])
+    train_end_date_obj = date.fromisoformat(quarters[max(train_quarters)]["end"])
+    
     # Test period
-    test_start = quarters[req.test_quarter]["start"]
-    test_end = quarters[req.test_quarter]["end"]
-    
-    # Training end date (end of last training quarter)
-    last_train_quarter = max(train_quarters)
-    train_end = quarters[last_train_quarter]["end"]
-    
+    test_start_date_obj = date.fromisoformat(quarters[req.test_quarter]["start"])
+    test_end_date_obj = date.fromisoformat(quarters[req.test_quarter]["end"])
+
+    # Calculate seasonal factors for the training period
+    seasonal_factors = _calculate_seasonal_factors(req.filters, training_start_date, train_end_date_obj)
+
     # Build filter conditions
     filters = req.filters or GlobalFilters()
     where_clause, filter_params = _build_global_filters(filters)
@@ -1460,14 +1696,14 @@ def validate_quarterly_forecast(req: QuarterlyValidationRequest) -> QuarterlyVal
             AVG(units_sold) as avg_demand
         FROM brand_x_data
         WHERE {where_clause}
-        AND date <= :train_end
+        AND date >= :training_start_date AND date <= :train_end_date_obj
         GROUP BY sku_id, warehouse_id
         HAVING COUNT(*) >= 90  -- At least 90 days of data
         ORDER BY total_demand DESC
         LIMIT :top_n
         """
         
-        params = {**filter_params, "train_end": train_end, "top_n": req.top_n_series}
+        params = {**filter_params, "training_start_date": training_start_date, "train_end_date_obj": train_end_date_obj, "top_n": req.top_n_series}
         result = conn.execute(text(top_series_sql), params)
         top_series = [dict(row._mapping) for row in result.fetchall()]
     
@@ -1483,9 +1719,9 @@ def validate_quarterly_forecast(req: QuarterlyValidationRequest) -> QuarterlyVal
             val_req = ValidationRequest(
                 sku_id=series["sku_id"],
                 warehouse_id=series["warehouse_id"],
-                train_end_date=train_end,
-                test_start_date=test_start,
-                test_end_date=test_end
+                train_end_date=train_end_date_obj,
+                test_start_date=test_start_date_obj,
+                test_end_date=test_end_date_obj
             )
             
             # Run validation
@@ -1561,8 +1797,8 @@ def validate_quarterly_forecast(req: QuarterlyValidationRequest) -> QuarterlyVal
         summary["model_distribution"] = model_counts
     
     return QuarterlyValidationResult(
-        test_period=f"Q{req.test_quarter} {req.year} ({test_start} to {test_end})",
-        train_period=f"Q{'-Q'.join(map(str, train_quarters))} {req.year} (up to {train_end})",
+        test_period=f"Q{req.test_quarter} {req.year} ({test_start_date_obj} to {test_end_date_obj})",
+        train_period=f"Q{'-Q'.join(map(str, train_quarters))} {req.year} (up to {train_end_date_obj})",
         series_tested=len(successful_results),
         overall_metrics={
             "overall_wape": overall_wape,
@@ -1574,7 +1810,24 @@ def validate_quarterly_forecast(req: QuarterlyValidationRequest) -> QuarterlyVal
         summary=summary
     )
 
-@app.get("/validate/quarterly/scenarios")
+@app.get("/validate/quarterly/scenarios",
+    summary="Get Available Quarterly Validation Scenarios",
+    description="""
+    **Retrieves a list of available historical data scenarios suitable for quarterly model validation.**
+    
+    This endpoint analyzes the historical data in the `brand_x_data` table to identify
+    years and quarters with sufficient data for training and testing. It recommends `test_quarter`
+    options and provides metadata (total records, unique SKUs) for each available year.
+    
+    **Key Features:**
+    - **Data-Driven Scenario Generation**: Automatically identifies valid validation periods.
+    - **Comprehensive Quarter Data**: Provides details on records and unique SKUs per quarter.
+    - **Recommendations**: Offers suggestions for optimal test quarters.
+    - **Facilitates UI Integration**: Helps frontends dynamically populate dropdowns for quarterly validation.
+    """,
+    response_description="A dictionary containing available validation scenarios, recommendations, and raw quarters data. Each scenario includes the year, available quarters, a recommended test quarter, total records, and unique SKUs for that year.",
+    tags=["Validation", "Scenarios"]
+)
 def get_quarterly_validation_scenarios() -> Dict[str, Any]:
     """Get available scenarios for quarterly validation testing"""
     
@@ -1628,9 +1881,42 @@ def get_quarterly_validation_scenarios() -> Dict[str, Any]:
         "quarters_data": quarters_data[:20]  # Recent quarters
     }
 
-@app.post("/validate/quarterly/fast")
-def validate_quarterly_forecast_fast(req: QuarterlyValidationRequest) -> Dict[str, Any]:
-    """Fast quarterly validation using statistical sampling for large datasets"""
+@app.post("/validate/quarterly/fast", response_model=QuarterlyValidationResult,
+    summary="Fast Quarterly Validation (Sampled)",
+    description="""
+    **Performs a faster, sampled version of the quarterly model validation for quick insights.**
+    
+    This endpoint is designed for rapid iteration and testing on large datasets. Instead of validating
+    all matching SKU series, it randomly samples a small subset (`top_n_series` capped at 3)
+    to quickly estimate overall model performance and identify major issues.
+    
+    **Key Features:**
+    - **Accelerated Validation**: Significantly faster execution for quick feedback cycles.
+    - **Statistical Sampling**: Provides representative performance estimates from a subset of data.
+    - **Identical Logic (Sampled)**: Uses the same underlying training and evaluation logic as the
+      full quarterly validation, ensuring consistency in methodology.
+    - **Ideal for Development/Debugging**: Quickly verify changes without long wait times.
+    """,
+    response_description="A QuarterlyValidationResult object, similar to the full quarterly validation, but based on a statistically sampled subset of series. It includes overall metrics, and detailed results for the sampled series.",
+    tags=["Validation", "Fast Performance"]
+)
+def validate_quarterly_forecast_fast(req: QuarterlyValidationRequest = Body(...,
+    examples=[
+        {
+            "year": 2024,
+            "test_quarter": 4,
+            "filters": {"product_categories": ["Casual_Wear"]},
+            "top_n_series": 3
+        },
+        {
+            "year": 2023,
+            "test_quarter": 2,
+            "top_n_series": 2
+        }
+    ],
+    description="Request parameters for performing a fast, sampled quarterly model validation."
+)) -> QuarterlyValidationResult:
+    """Validate model performance using 3 quarters training vs 1 quarter testing"""
     import time
     start_time = time.time()
     
@@ -1821,36 +2107,58 @@ def get_priority_level(deficit_surplus: float, current_inventory: float, forecas
 @app.post(
     "/demand/analysis", 
     response_model=DemandAnalysisResult,
-    summary="Comprehensive demand analysis and inventory optimization",
+    summary="Advanced Demand Analysis and Inventory Optimization",
     description="""
-    **Advanced inventory analytics with SKU-level optimization recommendations**
+    **Provides comprehensive inventory optimization insights and actionable recommendations.**
     
-    This endpoint performs comprehensive demand analysis across the entire product portfolio,
-    providing actionable insights for inventory management:
+    This endpoint performs detailed SKU-level demand analysis, identifies inventory imbalances
+    across warehouses, and offers expert-driven suggestions for inventory optimization.
     
     **Key Features:**
-    - SKU-level demand forecasting with seasonal adjustments
-    - Inventory deficit/surplus analysis by warehouse
-    - Transfer recommendations between warehouses
-    - Financial impact assessment (lost sales, holding costs)
-    - Risk alerts for critical stockout scenarios
+    - **SKU-level Forecasting**: Granular demand forecasts adjusted for seasonality and holidays.
+    - **Deficit/Surplus Analysis**: Identify inventory gaps or excesses by SKU and warehouse.
+    - **Estimated Stockout Dates**: Project when specific SKUs might run out of stock.
+    - **Financial Impact**: Quantify potential lost sales value and holding cost savings.
+    - **Consolidated Risk Alerts**: Summarize critical inventory risks with actionable deadlines.
+    - **Transfer Recommendations**: Suggest optimal inventory transfers between warehouses to balance stock.
+    - **Warehouse Filling Recommendations**: Provide insights on how to optimize warehouse space and stock.
+    - **Internal Inventory Shifting**: Recommendations for moving stock within the supply chain.
     
-    **Analysis Scope:**
-    - Historical demand patterns (365 days lookback)
-    - Current inventory levels (30 days rolling)
-    - Seasonal factors and holiday impacts
-    - Demand volatility assessment
-    
-    **Business Value:**
-    - Optimize inventory allocation across warehouses
-    - Minimize stockouts while reducing holding costs
-    - Identify transfer opportunities for surplus inventory
-    - Quantify financial risks and opportunities
+    **Filter Application**: All analysis is performed within the context of the `GlobalFilters`
+    provided, allowing users to drill down by brand, warehouse, product category, and date ranges.
     """,
-    response_description="Detailed demand analysis with inventory optimization recommendations",
-    tags=["Analytics", "Inventory Optimization"]
+    response_description="A detailed DemandAnalysisResult object containing SKU-level inventory analysis, transfer recommendations, aggregated risk alerts, financial impact, and execution summary.",
+    tags=["Inventory Optimization", "Demand Forecasting", "Analytics"]
 )
-def analyze_demand_and_inventory(req: DemandAnalysisRequest) -> DemandAnalysisResult:
+def analyze_demand_and_inventory(req: DemandAnalysisRequest = Body(...,
+    examples=[
+        {
+            "filters": {
+                "sku_ids": ["X_027", "X_043"],
+                "warehouse_ids": ["pune", "mumbai"],
+                "start_date": "2024-01-01",
+                "end_date": "2024-12-31",
+                "time_aggregation": "monthly",
+                "include_holidays": True,
+                "forecast_next_quarter": True
+            },
+            "analysis_horizon_days": 90,
+            "include_inventory_optimization": True,
+            "include_transfer_recommendations": True
+        },
+        {
+            "filters": {
+                "product_categories": ["Premium_Apparel"],
+                "start_date": "2024-07-01",
+                "end_date": "2024-09-30"
+            },
+            "analysis_horizon_days": 60,
+            "include_inventory_optimization": False,
+            "include_transfer_recommendations": False
+        }
+    ],
+    description="Request parameters for performing comprehensive demand analysis and inventory optimization."
+)) -> DemandAnalysisResult:
     """Comprehensive demand analysis with inventory optimization recommendations"""
     import time
     from datetime import datetime, timedelta

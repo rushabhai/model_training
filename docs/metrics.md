@@ -2,63 +2,45 @@
 
 This document provides a comprehensive overview of Direct-to-Consumer (D2C) inventory metrics used in the forecasting system.
 
-## Inventory Performance Metrics
-
-| Metric | Definition | Formula (LaTeX) | Purpose | D2C Use | Example |
-|--------|------------|-----------------|---------|---------|---------|
-| **Inventory Turnover** | Measures how many times inventory is sold and replaced over a period | $\text{Inventory Turnover} = \frac{\text{COGS}}{\text{Average Inventory}}$ | Assess inventory efficiency and working capital utilization | Track fast-moving vs slow-moving SKUs across channels | COGS=₹500,000; AvgInv=₹100,000 → 5× turnover |
-| **Inventory Days on Hand** | Number of days current inventory will last at current sales rate | $\text{Days on Hand} = \frac{\text{Average Inventory}}{\text{COGS}} \times 365$ | Optimize stock levels and identify overstock situations | Plan seasonal inventory and campaign stock | AvgInv=₹100,000; COGS=₹500,000 → 73 days |
-| **ABC Analysis** | Classification of SKUs by value contribution and turnover rate | $A: \text{Top 80\% value}$<br>$B: \text{Next 15\% value}$<br>$C: \text{Bottom 5\% value}$ | Prioritize inventory management focus and resources | Focus marketing spend on A-class items, optimize storage for C-class | Class A: 20% SKUs generating 80% revenue |
-| **Economic Order Quantity (EOQ)** | Optimal order quantity that minimizes total inventory costs | $\text{EOQ} = \sqrt{\frac{2DS}{H}}$ | Minimize ordering and holding costs | Optimize bulk purchase discounts vs storage costs | D=12,000 units/year; S=₹100; H=₹2 → EOQ≈1,095 units |
-| **Safety Stock** | Buffer inventory to protect against demand variability and lead time uncertainty | $\text{Safety Stock} = Z \times \sigma_d \times \sqrt{L}$ | Maintain service levels while minimizing stockouts | Handle demand spikes during promotions/campaigns | Z=1.65 (95% service); σ_d=50; L=4 weeks → 165 units |
-
-## Advanced D2C Metrics
-
-| Metric | Definition | Formula (LaTeX) | Purpose | D2C Use | Example |
-|--------|------------|-----------------|---------|---------|---------|
-| **WAPE (Weighted Absolute Percentage Error)** | Forecast accuracy weighted by actual demand volumes | $\text{WAPE} = \frac{\sum_{t=1}^n |A_t - F_t|}{\sum_{t=1}^n A_t} \times 100$ | Measure overall forecast accuracy across all SKUs | Evaluate ML model performance for demand planning | WAPE < 25% indicates good forecast accuracy |
-| **Service Level** | Percentage of demand met from stock without stockouts | $\text{Service Level} = \frac{\text{Orders Fulfilled}}{\text{Total Orders}} \times 100$ | Balance inventory costs with customer satisfaction | Set different targets for A/B/C class products | 95% service level for premium products |
-| **Fill Rate** | Percentage of order lines completely fulfilled from available stock | $\text{Fill Rate} = \frac{\text{Lines Shipped Complete}}{\text{Total Order Lines}} \times 100$ | Measure customer order fulfillment efficiency | Track impact of inventory decisions on customer experience | 98% fill rate target for same-day delivery |
-| **Stockout Risk** | Probability of running out of inventory within forecast horizon | $P(\text{Stockout}) = P(D > I + Q)$ | Proactively prevent stockouts for critical SKUs | Alert system for high-velocity products | 15% stockout risk triggers reorder alert |
-| **Demand Volatility Index** | Measure of demand pattern unpredictability | $\text{DVI} = \frac{\sigma_d}{\mu_d} \times 100$ | Identify products requiring different forecasting approaches | Apply Croston method for intermittent demand SKUs | DVI > 100% indicates high volatility |
-
-## Financial Impact Metrics
-
-| Metric | Definition | Formula (LaTeX) | Purpose | D2C Use | Example |
-|--------|------------|-----------------|---------|---------|---------|
-| **Revenue at Risk** | Potential revenue loss due to stockouts or insufficient inventory | $\text{Revenue at Risk} = \sum_{i=1}^n D_i \times P_i \times P(\text{Stockout}_i)$ | Quantify financial impact of inventory decisions | Prioritize inventory investments by revenue impact | ₹50,000 revenue at risk for Q4 holiday season |
-| **Lost Sales Value** | Actual revenue lost due to stockouts | $\text{Lost Sales} = \sum_{t=1}^n \max(0, D_t - I_t) \times P_t \times (1 - S_t)$ | Track cost of inventory management failures | Measure ROI of inventory optimization initiatives | ₹25,000 lost sales due to festival stockouts |
-| **Holding Cost Savings** | Cost reduction achieved through optimal inventory levels | $\text{Holding Savings} = (I_{\text{old}} - I_{\text{new}}) \times H \times P$ | Justify inventory optimization investments | Calculate savings from ML-driven demand planning | ₹15,000 quarterly savings from 20% inventory reduction |
-| **Inventory Turns** | Annual rate at which inventory is sold and replaced | $\text{Inventory Turns} = \frac{\text{COGS}}{\text{Average Inventory}}$ | Benchmark against industry standards and track improvement | Compare performance across product categories | Electronics: 12× turns; Apparel: 4× turns |
-
 ## Key Performance Indicators (KPIs)
 
-### Forecast Accuracy KPIs
-- **Target WAPE**: ≤ 25% for overall portfolio
-- **Target Bias**: ≤ ±5% to avoid systematic over/under-forecasting
-- **MASE (Mean Absolute Scaled Error)**: < 1.0 indicates better than naive seasonal forecast
-
-### Service Level KPIs
-- **A-Class SKUs**: 98% service level
-- **B-Class SKUs**: 95% service level  
-- **C-Class SKUs**: 90% service level
-
-### Financial KPIs
-- **Inventory Turnover**: > 6× annually for fast-moving consumer goods
-- **Days of Cover**: 30-60 days optimal range for most D2C categories
-- **Stockout Rate**: < 2% for premium products, < 5% for standard products
+| Metric | Definition | Formula (LaTeX) | Purpose | D2C Use | Example |
+|---|---|---|---|---|---|
+| **WAPE (Weighted Absolute Percentage Error)** | Measures the overall accuracy of forecasts, weighted by demand volume. | $\text{WAPE} = \frac{\sum |A_t - F_t|}{\sum A_t} \times 100\%$ | Evaluate overall forecast reliability for aggregate demand planning. | Assessing the accuracy of promotional forecasts for a product category. | WAPE < 25% for high-moving items. |
+| **MAPE (Mean Absolute Percentage Error)** | Average percentage of error between actuals and forecasts. | $\text{MAPE} = \frac{1}{n} \sum \frac{|A_t - F_t|}{A_t} \times 100\%$ | Understand average forecast accuracy across individual SKUs. | Comparing accuracy between different forecasting models. | A model with 10% MAPE. |
+| **MAE (Mean Absolute Error)** | Average absolute difference between actuals and forecasts, in units. | $\text{MAE} = \frac{1}{n} \sum |A_t - F_t|$ | Provides error in actual demand units, easy to interpret. | Quantifying the absolute forecasting error in a specific warehouse. | An MAE of 50 units for a popular SKU. |
+| **Bias (ME%)** | Indicates whether the forecast consistently over- or under-predicts demand. | $\text{Bias} = \frac{\sum (F_t - A_t)}{\sum A_t} \times 100\%$ | Identify systematic overstocking or stockout risks due to biased forecasts. | Adjusting future forecasts if a consistent negative bias (under-forecast) is observed. | Bias of -5% indicates consistent under-forecasting. |
+| **Service Level** | Percentage of customer demand fulfilled from available stock. | $\text{Service Level} = \frac{\text{Units Fulfilled}}{\text{Units Demanded}} \times 100\%$ | Optimize inventory to meet customer expectations and avoid lost sales. | Setting 98% service level for premium, high-margin products. | Achieved 95% service level during peak season. |
+| **Fill Rate** | Percentage of total units demanded that are fulfilled. | $\text{Fill Rate} = \frac{\text{Units Shipped}}{\text{Units Ordered}} \times 100\%$ | Measure the efficiency of order fulfillment and inventory availability. | Ensuring a high fill rate for essential product bundles. | 97% fill rate for all online orders. |
+| **Stockout Risk** | Probability of running out of stock for a given SKU within a defined period. | $P(\text{Stockout}) = P(D > I)$ | Proactively manage critical inventory shortages. | Generating alerts for SKUs with >20% stockout risk in the next 30 days. | 15% risk of stockout for SKU X_001. |
+| **Cycle Service Level** | The probability of not having a stockout during a replenishment cycle. | $P(\text{No Stockout in Cycle})$ | Ensure sufficient inventory to cover demand during lead times. | Optimizing reorder points for a 30-day replenishment cycle. | 90% cycle service level. |
+| **Overstock %** | Percentage of inventory units considered in excess of anticipated demand. | $\text{Overstock Percentage} = \frac{\text{Excess Inventory}}{\text{Total Inventory}} \times 100\%$ | Identify and reduce capital tied up in slow-moving or excess stock. | Prioritizing liquidation or transfer of products with >30% overstock. | 25% of inventory is overstocked. |
+| **Inventory Turns** | Number of times inventory is sold and replaced over a period (e.g., annually). | $\text{Inventory Turns} = \frac{\text{Cost of Goods Sold}}{\text{Average Inventory Value}}$ | Assess inventory efficiency and liquidity. | Benchmarking against industry averages to improve inventory velocity. | An inventory turnover of 6x annually. |
+| **Days of Cover** | Number of days of sales that can be covered with current inventory. | $\text{Days of Cover} = \frac{\text{Current Inventory}}{\text{Average Daily Sales}}$ | Determine how long current stock will last, aiding reorder decisions. | Ensuring 30-60 days of cover for most SKUs. | 45 days of cover for a seasonal product. |
+| **Revenue at Risk** | Estimated potential revenue loss due to stockouts or insufficient inventory. | $\text{Revenue at Risk} = \sum (\text{Deficit Units} \times \text{Unit Price})$ | Quantify the financial impact of poor inventory management. | Prioritizing inventory investments to mitigate revenue loss during peak sales. | ₹100,000 revenue at risk in the next quarter. |
+| **Lost Sales Units** | Number of units of demand lost directly due to stockouts. | $\text{Lost Sales Units} = \sum \max(0, \text{Demand} - \text{Available})$ | Measure the direct impact of inventory shortages on sales volume. | Tracking the effectiveness of safety stock and lead time reductions. | 500 units of SKU X_002 lost in sales last month. |
+| **Forecast Value Add (FVA)** | Measures the improvement of the model's forecast over a naive baseline. | $\text{FVA} = \frac{\text{Baseline Error} - \text{Model Error}}{\text{Baseline Error}} \times 100\%$ | Quantify the value added by advanced forecasting techniques. | Justifying investment in ML models by demonstrating accuracy gains. | An FVA of 15% over a simple moving average. |
+| **Next Quarter Demand Forecast** | Projected total demand for the upcoming quarter. | $\text{Next Q Forecast} = \sum \text{Daily Forecasts for Q}$ | Strategic planning for seasonal inventory buildup and marketing campaigns. | Preparing for holiday season demand for Q4. | Next quarter forecast of 15,000 units. |
+| **Seasonal Adjustment Factor** | A multiplier applied to base demand to account for expected seasonal fluctuations. | $\text{SAF} = \frac{\text{Average Demand in Season}}{\text{Overall Average Demand}}$ | Fine-tuning forecasts for predictable demand shifts throughout the year. | Adjusting demand forecasts for summer clothing. | SAF of 1.2 for Diwali season. |
+| **Holiday Impact %** | The percentage increase or decrease in demand specifically attributable to holidays. | $\text{Holiday Impact} = \frac{\text{Demand on Holiday} - \text{Normal Demand}}{\text{Normal Demand}} \times 100\%$ | Quantify the influence of individual holidays on sales patterns. | Adjusting inventory levels specifically for Christmas sales. | 20% uplift due to a national holiday. |
+| **Festive Season Uplift** | The overall percentage increase in demand during a major festive period (e.g., Diwali season). | $\text{Festive Uplift} = \frac{\text{Demand in Festive Season} - \text{Normal Demand}}{\text{Normal Demand}} \times 100\%$ | Strategic planning for large-scale, multi-month demand spikes. | Planning inventory and marketing for the entire Q4 festive period. | 30% overall uplift during the festive season. |
+| **Demand Volatility Index** | Measures the variability or fluctuation in demand over a specific period. | $\text{DVI} = \frac{\text{Standard Deviation of Demand}}{\text{Average Demand}} \times 100\%$ | Identify highly erratic products requiring flexible inventory strategies. | Prioritizing dynamic safety stock for high DVI products. | A DVI of 45% for a trendy fashion item. |
+| **High Risk SKUs** | Count of SKUs with a high probability of stockout or significant overstock. | N/A | Focus immediate attention and resources on critical inventory problems. | Identifying top 10 SKUs requiring urgent replenishment. | 5 SKUs categorized as High Risk. |
+| **Medium Risk SKUs** | Count of SKUs with moderate inventory imbalances or upcoming risks. | N/A | Monitor and plan for potential future issues. | Reviewing inventory for SKUs with upcoming seasonal demand changes. | 15 SKUs categorized as Medium Risk. |
+| **Low Risk SKUs** | Count of SKUs with healthy inventory levels and minimal risk. | N/A | Maintain current inventory strategy. | Automated reordering for stable, low-risk products. | 50 SKUs categorized as Low Risk. |
+| **Overstock SKUs** | Count of SKUs currently holding excess inventory above optimal levels. | N/A | Identify products for promotions, transfers, or liquidation. | Planning a flash sale for 10 overstocked apparel SKUs. | 8 SKUs currently in Overstock. |
 
 ## Implementation Notes
 
-1. **Data Requirements**: All metrics require clean, consistent data from the `brand_x_data` table
-2. **Seasonality**: Apply seasonal adjustment factors for holiday/festival periods
-3. **Category Segmentation**: Different targets for Electronics, Apparel, Home goods, etc.
-4. **Refresh Frequency**: Daily calculation for operational metrics, weekly for strategic KPIs
-5. **Alerting Thresholds**: Configure alerts when metrics exceed acceptable ranges
+1.  **Data Requirements**: All metrics require clean, consistent data from the `brand_x_data` table.
+2.  **Seasonality**: Apply seasonal adjustment factors for holiday/festival periods.
+3.  **Category Segmentation**: Different targets for Electronics, Apparel, Home goods, etc.
+4.  **Refresh Frequency**: Daily calculation for operational metrics, weekly for strategic KPIs.
+5.  **Alerting Thresholds**: Configure alerts when metrics exceed acceptable ranges.
 
 ## References
 
-- **Demand Planning**: Holt-Winters (additive) for smooth demand, Croston-SBA for intermittent
-- **Prediction Intervals**: P10/P50/P90 using split-conformal method
-- **Safety Stock**: Based on demand volatility and lead time variability
-- **Service Levels**: Optimized using news-vendor model for profit maximization
+1.  **Demand Planning**: Holt-Winters (additive) for smooth demand, Croston-SBA for intermittent.
+2.  **Prediction Intervals**: P10/P50/P90 using split-conformal method.
+3.  **Safety Stock**: Based on demand volatility and lead time variability.
+4.  **Service Levels**: Optimized using news-vendor model for profit maximization.
