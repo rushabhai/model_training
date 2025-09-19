@@ -30,6 +30,7 @@ import ForecastChart from './ForecastChart';
 import RiskDistributionChart from './RiskDistributionChart';
 import TopSeriesTable from './TopSeriesTable';
 import ForecastDialog from './ForecastDialog';
+import AIChat from './AIChat';
 import { getDashboardData } from '../api';
 import { DashboardData, GlobalFilters as GlobalFiltersType } from '../types';
 
@@ -349,6 +350,26 @@ const Dashboard: React.FC = () => {
                 >
                   🔍 Check Demand Analysis
                 </Button>
+                <Button
+                  variant="outlined"
+                  size="large"
+                  onClick={() => navigate('/ml-explanation')}
+                  sx={{
+                    borderColor: 'secondary.main',
+                    color: 'secondary.main',
+                    '&:hover': { 
+                      borderColor: 'secondary.dark',
+                      bgcolor: 'secondary.light',
+                      color: 'secondary.dark'
+                    },
+                    px: 4,
+                    py: 1.5,
+                    fontSize: '1.1rem',
+                    fontWeight: 600
+                  }}
+                >
+                  🧠 ML Model Explanation
+                </Button>
               </Box>
             </Grid>
           </Grid>
@@ -372,6 +393,15 @@ const Dashboard: React.FC = () => {
               <TopSeriesTable 
                 data={dashboardData.top_series}
                 onSeriesClick={handleSeriesClick}
+              />
+            </Grid>
+          </Grid>
+
+          {/* AI Assistant */}
+          <Grid container spacing={3} mt={2}>
+            <Grid item xs={12}>
+              <AIChat 
+                context={`Current dashboard shows service level of ${dashboardData.kpis.service_level?.toFixed(1) || 0}% and WAPE accuracy of ${dashboardData.kpis.wape?.toFixed(1) || 0}%.`}
               />
             </Grid>
           </Grid>

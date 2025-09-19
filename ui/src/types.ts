@@ -264,3 +264,33 @@ export interface DemandAnalysisResult {
     surplus_skus: number;
   };
 }
+
+// AI Response Types
+export interface AIRequest {
+  prompt: string;
+  max_tokens?: number;
+  temperature?: number;
+}
+
+export interface AIResponse {
+  response: string;
+  model: string;
+  usage: Record<string, any>;
+}
+
+// ML Explanation Types
+export interface ExplainRequest {
+  sku_id: string;
+  warehouse_id: string;
+}
+
+export interface ExplainResponse {
+  sku_id: string;
+  warehouse_id: string;
+  model: string;
+  top_features: Array<{
+    feature: string;
+    shap_value: number;
+    importance: number;
+  }>;
+}

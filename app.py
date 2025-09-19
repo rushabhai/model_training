@@ -12,6 +12,11 @@ from fastapi import FastAPI, HTTPException, Request, Body
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, constr, conint
 from sqlalchemy import create_engine, text
+import joblib
+import lightgbm as lgb
+import shap
+import requests
+import json
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -24,12 +29,20 @@ PG_URI = os.environ.get("PG_URI")  # e.g. postgresql+psycopg2://user:pass@host:5
 if not PG_URI:
     raise RuntimeError("Missing PG_URI environment variable for Postgres connection.")
 
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
+GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
+
 ENGINE = create_engine(PG_URI, pool_pre_ping=True, pool_size=5, max_overflow=10)
 
 DEFAULT_SEASON = 7              # weekly seasonality on daily data
 DEFAULT_MIN_TRAIN = 56          # days
 DEFAULT_MAX_HORIZON = 28        # guardrail
 CALIBRATION_TAIL = 90           # days for conformal residuals (one-step-ahead)
+
+# Global variables for ML models
+lgb_models = {}
+lgb_features = []
+router_worst_skus = set()
 
 # Monitoring
 request_metrics = {
@@ -573,6 +586,156 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# --------------------------------------------------------------------------------------
+# Model Loading Functions
+# --------------------------------------------------------------------------------------
+def load_ml_models():
+    """Load LightGBM models and features at startup"""
+    global lgb_models, lgb_features, router_worst_skus
+    
+    try:
+        # Load LightGBM models
+        models_dir = "models"
+        if os.path.exists(os.path.join(models_dir, "lgb_q10.joblib")):
+            lgb_models['p10'] = joblib.load(os.path.join(models_dir, "lgb_q10.joblib"))
+            lgb_models['p50'] = joblib.load(os.path.join(models_dir, "lgb_q50.joblib"))
+            lgb_models['p90'] = joblib.load(os.path.join(models_dir, "lgb_q90.joblib"))
+            lgb_features = joblib.load(os.path.join(models_dir, "feats.joblib"))
+            logger.info("LightGBM models loaded successfully")
+        else:
+            logger.warning("LightGBM models not found. Run 'python train_ml.py' to train models.")
+        
+        # Load router worst SKUs
+        worst_file = "outputs/router_worst50_by_wape.csv"
+        if os.path.exists(worst_file):
+            worst_df = pd.read_csv(worst_file)
+            router_worst_skus = set(zip(worst_df['sku_id'], worst_df['warehouse_id']))
+            logger.info(f"Loaded {len(router_worst_skus)} worst-performing SKU-warehouse pairs")
+        else:
+            logger.warning("Router worst SKUs file not found. All forecasts will use router model.")
+            
+    except Exception as e:
+        logger.error(f"Error loading ML models: {e}")
+
+def generate_ml_features(df: pd.DataFrame, sku_id: str, warehouse_id: str) -> pd.DataFrame:
+    """Generate features for ML model prediction"""
+    # Create lag features
+    for lag in [1, 7, 14, 28]:
+        df[f'demand_qty_lag_{lag}'] = df.groupby(['sku_id', 'warehouse_id'])['demand_qty'].shift(lag)
+    
+    # Create rolling features
+    for window in [7, 28]:
+        df[f'demand_qty_mean_{window}'] = df.groupby(['sku_id', 'warehouse_id'])['demand_qty'].transform(
+            lambda x: x.shift(1).rolling(window=window, min_periods=1).mean()
+        )
+        df[f'demand_qty_std_{window}'] = df.groupby(['sku_id', 'warehouse_id'])['demand_qty'].transform(
+            lambda x: x.shift(1).rolling(window=window, min_periods=1).std()
+        ).fillna(0)
+    
+    # Create time features
+    df['dow'] = df['date'].dt.dayofweek
+    df['week_num'] = df['date'].dt.isocalendar().week.astype(int)
+    df['month_num'] = df['date'].dt.month
+    
+    # Ensure all required features exist
+    for col in ['selling_price', 'discount_percent', 'promotion_flag', 'mrp', 'competitor_avg_price']:
+        if col not in df.columns:
+            df[col] = 0.0
+        else:
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+    
+    # Create price index features
+    df['price_index_mrp'] = df['selling_price'] / (df['mrp'] + 1e-8)  # Avoid division by zero
+    df['price_index_comp'] = df['selling_price'] / (df['competitor_avg_price'] + 1e-8)  # Avoid division by zero
+    
+    if 'promotion_flag' in df.columns:
+        df['promotion_flag'] = df['promotion_flag'].astype(int)
+    else:
+        df['promotion_flag'] = 0
+    
+    return df
+
+def predict_with_ml(sku_id: str, warehouse_id: str, horizon: int) -> Dict[str, Any]:
+    """Generate forecast using LightGBM models"""
+    if not lgb_models or not lgb_features:
+        raise HTTPException(status_code=503, detail="ML models not loaded")
+    
+    try:
+        # Get recent data for feature generation
+        with ENGINE.connect() as conn:
+            query = """
+            SELECT date, sku_id, warehouse_id, units_sold as demand_qty,
+                   selling_price, discount_percent, promotion_flag, 
+                   mrp, competitor_avg_price
+            FROM brand_x_data
+            WHERE sku_id = :sku_id AND warehouse_id = :warehouse_id
+            AND date >= :start_date
+            ORDER BY date DESC
+            LIMIT 100
+            """
+            
+            start_date = (date.today() - timedelta(days=100)).isoformat()
+            result = conn.execute(text(query), {
+                'sku_id': sku_id, 
+                'warehouse_id': warehouse_id,
+                'start_date': start_date
+            })
+            
+            df = pd.DataFrame(result.fetchall(), columns=result.keys())
+            df['date'] = pd.to_datetime(df['date'])
+            
+        if df.empty:
+            raise HTTPException(status_code=404, detail="No data found for ML prediction")
+        
+        # Generate features
+        df = generate_ml_features(df, sku_id, warehouse_id)
+        
+        # Get the most recent row for prediction
+        latest_row = df.iloc[-1]
+        
+        # Prepare features for prediction
+        X_pred = pd.DataFrame([latest_row[feat] for feat in lgb_features]).T
+        X_pred.columns = lgb_features
+        
+        # Fill any remaining NaNs
+        X_pred = X_pred.fillna(0)
+        
+        # Generate forecasts
+        forecasts = []
+        for i in range(horizon):
+            p10 = lgb_models['p10'].predict(X_pred)[0]
+            p50 = lgb_models['p50'].predict(X_pred)[0]
+            p90 = lgb_models['p90'].predict(X_pred)[0]
+            
+            # Ensure non-negative predictions
+            p10 = max(0, p10)
+            p50 = max(0, p50)
+            p90 = max(0, p90)
+            
+            forecast_date = (date.today() + timedelta(days=i+1)).isoformat()
+            forecasts.append({
+                "day": forecast_date,
+                "p10": float(p10),
+                "p50": float(p50),
+                "p90": float(p90)
+            })
+        
+        return {
+            "model": "LightGBM_Quantile",
+            "bucket": "ML_FALLBACK",
+            "forecasts": forecasts
+        }
+        
+    except Exception as e:
+        logger.error(f"ML prediction error: {e}")
+        raise HTTPException(status_code=500, detail=f"ML prediction failed: {str(e)}")
+
+# Startup event
+@app.on_event("startup")
+async def startup_event():
+    """Load ML models and worst SKUs at startup"""
+    load_ml_models()
+
 # Monitoring middleware
 start_time = time.time()
 
@@ -653,6 +816,42 @@ def get_single_forecast(req: ForecastRequest = Body(...,
     ],
     description="Request parameters for generating a single SKU demand forecast."
 )) -> ForecastResult:
+    # Check if this SKU-warehouse pair should use ML fallback
+    if (req.sku_id, req.warehouse_id) in router_worst_skus:
+        try:
+            ml_result = predict_with_ml(req.sku_id, req.warehouse_id, req.horizon)
+            
+            # Convert ML result to ForecastResult format
+            last_day = date.today()
+            days = [last_day + timedelta(days=i) for i in range(1, req.horizon + 1)]
+            
+            points = []
+            for i, day in enumerate(days):
+                if i < len(ml_result["forecasts"]):
+                    forecast = ml_result["forecasts"][i]
+                    points.append(ForecastPoint(
+                        day=day,
+                        p10=forecast["p10"],
+                        p50=forecast["p50"],
+                        p90=forecast["p90"]
+                    ))
+            
+            return ForecastResult(
+                sku_id=req.sku_id,
+                warehouse_id=req.warehouse_id,
+                model=ml_result["model"],
+                bucket=ml_result["bucket"],
+                history_days=100,  # Approximate for ML
+                train_days=100,
+                horizon=req.horizon,
+                start_history=last_day - timedelta(days=100),
+                end_history=last_day,
+                forecasts=points
+            )
+        except Exception as e:
+            logger.warning(f"ML fallback failed for {req.sku_id}-{req.warehouse_id}: {e}. Using router model.")
+    
+    # Use original router logic
     df = _fetch_series(req.sku_id, req.warehouse_id, req)
     if df.empty:
         raise HTTPException(status_code=404, detail="Series not found or no history for given filters.")
@@ -2498,3 +2697,168 @@ def analyze_demand_and_inventory(req: DemandAnalysisRequest = Body(...,
         execution_summary={"response_time_ms": response_time_ms},
         sku_summary=sku_summary
     )
+
+# --------------------------------------------------------------------------------------
+# ML Model Explanation Endpoint
+# --------------------------------------------------------------------------------------
+class ExplainRequest(BaseModel):
+    sku_id: str
+    warehouse_id: str
+
+class ExplainResponse(BaseModel):
+    sku_id: str
+    warehouse_id: str
+    model: str
+    top_features: List[Dict[str, Any]]
+
+@app.post("/explain", response_model=ExplainResponse,
+    summary="Explain ML Model Predictions",
+    description="""
+    **Get SHAP feature importance for ML model predictions**
+    
+    Returns the top 5 most important features for a given SKU-warehouse pair using the 
+    LightGBM P50 model. This helps understand what drives the model's predictions.
+    
+    **Features analyzed:**
+    * Lag features (1, 7, 14, 28 days)
+    * Rolling statistics (7, 28 day means and standard deviations)
+    * Price and promotion features
+    * Time-based features (day of week, week number, month)
+    """,
+    response_description="An ExplainResponse object containing the SKU and warehouse IDs, model name, and top 5 features with their SHAP values.",
+    tags=["ML", "Explainability"]
+)
+def explain_prediction(req: ExplainRequest) -> ExplainResponse:
+    """Explain ML model predictions using SHAP values"""
+    if not lgb_models or 'p50' not in lgb_models:
+        raise HTTPException(status_code=503, detail="ML models not loaded")
+    
+    try:
+        # Get recent data for feature generation
+        with ENGINE.connect() as conn:
+            query = """
+            SELECT date, sku_id, warehouse_id, units_sold as demand_qty,
+                   selling_price, discount_percent, promotion_flag, 
+                   mrp, competitor_avg_price
+            FROM brand_x_data
+            WHERE sku_id = :sku_id AND warehouse_id = :warehouse_id
+            AND date >= :start_date
+            ORDER BY date DESC
+            LIMIT 100
+            """
+            
+            start_date = (date(2024, 12, 1)).isoformat()  # Use December 2024 data
+            result = conn.execute(text(query), {
+                'sku_id': req.sku_id, 
+                'warehouse_id': req.warehouse_id,
+                'start_date': start_date
+            })
+            
+            df = pd.DataFrame(result.fetchall(), columns=result.keys())
+            df['date'] = pd.to_datetime(df['date'])
+            
+        if df.empty:
+            raise HTTPException(status_code=404, detail="No data found for explanation")
+        
+        # Generate features
+        df = generate_ml_features(df, req.sku_id, req.warehouse_id)
+        
+        # Get the most recent row for prediction
+        latest_row = df.iloc[-1]
+        
+        # Prepare features for prediction
+        X_pred = pd.DataFrame([latest_row[feat] for feat in lgb_features]).T
+        X_pred.columns = lgb_features
+        
+        # Fill any remaining NaNs
+        X_pred = X_pred.fillna(0)
+        
+        # Calculate SHAP values
+        explainer = shap.TreeExplainer(lgb_models['p50'])
+        shap_values = explainer.shap_values(X_pred)
+        
+        # Get top 5 features by absolute SHAP value
+        feature_importance = list(zip(lgb_features, shap_values[0]))
+        feature_importance.sort(key=lambda x: abs(x[1]), reverse=True)
+        top_features = [
+            {"feature": feat, "shap_value": float(shap_val), "importance": abs(float(shap_val))}
+            for feat, shap_val in feature_importance[:5]
+        ]
+        
+        return ExplainResponse(
+            sku_id=req.sku_id,
+            warehouse_id=req.warehouse_id,
+            model="LightGBM_P50",
+            top_features=top_features
+        )
+        
+    except Exception as e:
+        logger.error(f"Explanation error: {e}")
+        raise HTTPException(status_code=500, detail=f"Explanation failed: {str(e)}")
+
+# --------------------------------------------------------------------------------------
+# Groq AI API Endpoint
+# --------------------------------------------------------------------------------------
+class AIRequest(BaseModel):
+    prompt: str
+    max_tokens: int = 1000
+    temperature: float = 0.7
+
+class AIResponse(BaseModel):
+    response: str
+    model: str
+    usage: Dict[str, Any]
+
+@app.post("/ai/response", response_model=AIResponse,
+    summary="Get AI Response using Groq API",
+    description="""
+    **Get AI-powered responses using Groq API**
+    
+    This endpoint provides AI responses using the Groq API with OpenAI-compatible interface.
+    Useful for generating insights, explanations, or recommendations based on inventory data.
+    
+    **Parameters:**
+    * `prompt`: The input prompt for the AI
+    * `max_tokens`: Maximum tokens in response (default: 1000)
+    * `temperature`: Response creativity (0.0-1.0, default: 0.7)
+    """,
+    response_description="An AIResponse object containing the AI-generated response, model used, and token usage information.",
+    tags=["AI", "Groq"]
+)
+def get_ai_response(req: AIRequest) -> AIResponse:
+    """Get AI response using Groq API"""
+    if not GROQ_API_KEY:
+        raise HTTPException(status_code=503, detail="Groq API key not configured")
+    
+    try:
+        headers = {
+            "Authorization": f"Bearer {GROQ_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        
+        payload = {
+            "model": "llama3-8b-8192",  # Groq's default model
+            "messages": [
+                {"role": "user", "content": req.prompt}
+            ],
+            "max_tokens": req.max_tokens,
+            "temperature": req.temperature
+        }
+        
+        response = requests.post(GROQ_API_URL, headers=headers, json=payload, timeout=30)
+        response.raise_for_status()
+        
+        data = response.json()
+        
+        return AIResponse(
+            response=data["choices"][0]["message"]["content"],
+            model=data["model"],
+            usage=data.get("usage", {})
+        )
+        
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Groq API error: {e}")
+        raise HTTPException(status_code=500, detail=f"AI request failed: {str(e)}")
+    except Exception as e:
+        logger.error(f"AI response error: {e}")
+        raise HTTPException(status_code=500, detail=f"AI response failed: {str(e)}")

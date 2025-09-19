@@ -9,9 +9,16 @@ import {
   ValidationResult,
   DemandAnalysisRequest,
   DemandAnalysisResult,
+  AIRequest,
+  AIResponse,
+  ExplainRequest,
+  ExplainResponse,
 } from './types';
 
-const API_BASE = process.env.REACT_APP_API_URL || 'http://localhost:8001';
+// Re-export types for easier importing
+export type { AIRequest, AIResponse, ExplainRequest, ExplainResponse } from './types';
+
+const API_BASE = process.env.REACT_APP_API_URL || 'http://localhost:8000';
 
 const api = axios.create({
   baseURL: API_BASE,
@@ -123,6 +130,18 @@ export const analyzeDemand = async (request: DemandAnalysisRequest): Promise<Dem
   };
   
   const response = await api.post('/demand/analysis', mergedRequest);
+  return response.data;
+};
+
+// AI Response API
+export const getAIResponse = async (request: AIRequest): Promise<AIResponse> => {
+  const response = await api.post('/ai/response', request);
+  return response.data;
+};
+
+// ML Explanation API
+export const getMLExplanation = async (request: ExplainRequest): Promise<ExplainResponse> => {
+  const response = await api.post('/explain', request);
   return response.data;
 };
 

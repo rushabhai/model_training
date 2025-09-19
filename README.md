@@ -263,9 +263,17 @@ graph TD
     B --> C1[Materialized View: brand_x_gold] --> D1[Materialized View: demand_daily]
     B --> C2[Materialized View: product_metadata]
     D1 --> E[ML Training Pipeline (train_router.py)]
+    D1 --> E2[LightGBM Training Pipeline (train_ml.py)]
     E -- Models & Metrics --> F[FastAPI Serving API (app.py)]
+    E2 -- LightGBM Models & Features --> F
     F -- Forecasts & Insights --> G[React Frontend UI]
     G -- User Filters & Requests --> F
+    F --> H{Model Selection Logic}
+    H -->|SKU in Worst 50| I[LightGBM Quantile Models]
+    H -->|SKU not in Worst 50| J[Router Models (Holt-Winters/Croston)]
+    I --> K[P10/P50/P90 Forecasts]
+    J --> K
+    K --> L[SHAP Explanations & Groq AI]
 ```
 
 **Data Flow Description:**
@@ -285,11 +293,20 @@ graph TD
     *   Selects appropriate model: Holt-Winters (for SMOOTH/ERRATIC) or Croston-SBA (for INTERMITTENT).
     *   Trains models using a rolling-origin backtest strategy.
     *   Outputs model metrics (WAPE, MAPE, MAE, Bias%) and trained model parameters.
-5.  **FastAPI Serving API (`app.py`)**: The core backend service:
+5.  **LightGBM Training Pipeline (`train_ml.py`)**: This Python script:
+    *   Fetches data from `brand_x_data` table directly.
+    *   Generates comprehensive features: lag features (1, 7, 14, 28 days), rolling statistics (7, 28 day means/stds), price features, and time-based features.
+    *   Excludes `censored_oos` data from training to prevent bias.
+    *   Trains three LightGBM quantile regression models (P10, P50, P90) for fallback forecasting.
+    *   Saves models as `models/lgb_q*.joblib` and feature list as `models/feats.joblib`.
+6.  **FastAPI Serving API (`app.py`)**: The core backend service:
     *   Receives requests from the UI (dashboard, forecast, demand analysis, validation).
-    *   Loads pre-trained model parameters or performs lightweight on-demand fitting.
+    *   Loads both router models and LightGBM models at startup.
+    *   Implements fallback logic: uses LightGBM for SKUs in `router_worst50_by_wape.csv`, otherwise uses router models.
     *   Applies seasonal adjustments, holiday impacts, and demand volatility factors.
-    *   Generates probabilistic forecasts (P10, P50, P90) using Split-Conformal methods.
+    *   Generates probabilistic forecasts (P10, P50, P90) using either router or LightGBM models.
+    *   Provides SHAP explanations for ML model predictions via `/explain` endpoint.
+    *   Integrates Groq AI API for intelligent insights via `/ai/response` endpoint.
     *   Calculates various KPIs, performs inventory optimization, and generates risk alerts.
 6.  **React Frontend UI**: The user-facing application:
     *   Provides interactive dashboards and visualizations.
@@ -301,12 +318,20 @@ graph TD
 
 #### 2.1. Environment Variables
 
-Ensure the following environment variable is set before running any backend or training scripts:
+Ensure the following environment variables are set before running any backend or training scripts:
 
 ```bash
+# Database Configuration
 export PG_URI='postgresql+psycopg2://<YOUR_USER>:<YOUR_PASSWORD>@<YOUR_HOST>:5432/<YOUR_DATABASE>'
 # Note: It's recommended to use a read-only database user for the application.
+
+# Groq API Configuration (Optional - for AI responses)
+export GROQ_API_KEY='your_groq_api_key_here'
 ```
+
+**Environment Variables Description:**
+- `PG_URI`: PostgreSQL connection string for the database containing `brand_x_data` table
+- `GROQ_API_KEY`: API key for Groq AI service (optional, enables `/ai/response` endpoint)
 
 #### 2.2. Refresh Materialized Views
 
@@ -330,7 +355,9 @@ echo "✅ Materialized views refreshed successfully."
 
 #### 2.3. Train Forecasting Models
 
-The `train_router.py` script trains the ML models. It can be run after refreshing the materialized views.
+##### 2.3.1. Train Router Models
+
+The `train_router.py` script trains the traditional ML models. It can be run after refreshing the materialized views.
 
 ```bash
 # Navigate to the project root if not already there
@@ -339,7 +366,7 @@ cd /path/to/stacklogix
 # Activate your Python virtual environment
 source .venv/bin/activate
 
-# Run the training script (adjust parameters as needed)
+# Run the router training script (adjust parameters as needed)
 python train_router.py \
   --db "$PG_URI" \
   --start_date 2022-01-01 \
@@ -350,7 +377,29 @@ python train_router.py \
   --horizon 7 \
   --outdir ./outputs
 
-echo "✅ Forecasting models trained. Outputs saved to ./outputs/."
+echo "✅ Router models trained. Outputs saved to ./outputs/."
+```
+
+##### 2.3.2. Train LightGBM Fallback Models
+
+The `train_ml.py` script trains the LightGBM quantile regression models for fallback forecasting.
+
+```bash
+# Navigate to the project root if not already there
+cd /path/to/stacklogix
+
+# Activate your Python virtual environment
+source .venv/bin/activate
+
+# Run the LightGBM training script (adjust parameters as needed)
+python train_ml.py \
+  --start_date 2022-01-01 \
+  --end_date 2024-12-31
+
+echo "✅ LightGBM models trained. Models saved to ./models/."
+```
+
+**Note**: The LightGBM training uses the `PG_URI` environment variable and generates comprehensive features including lag features, rolling statistics, price features, and time-based features. It excludes `censored_oos` data from training to prevent bias.
 ```
 
 #### 2.4. Serve FastAPI Backend
@@ -369,6 +418,11 @@ uvicorn app:app --host 0.0.0.0 --port 8001 --reload
 
 echo "✅ FastAPI backend running on http://0.0.0.0:8001."
 ```
+
+**New API Endpoints:**
+- `/explain`: Get SHAP feature importance for ML model predictions
+- `/ai/response`: Get AI-powered responses using Groq API
+- Enhanced `/forecast` and `/forecast/batch`: Now use LightGBM fallback for poorly performing SKUs
 
 #### 2.5. Run React Frontend
 

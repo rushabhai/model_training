@@ -15,7 +15,7 @@ Before you begin, ensure you have the following installed:
 
 ## 1. Backend Setup
 
-Ensure your FastAPI backend is running. Refer to the main `README.md` for detailed instructions on setting up and starting the backend. The UI expects the backend to be running on `http://localhost:8001`.
+Ensure your FastAPI backend is running. Refer to the main `README.md` for detailed instructions on setting up and starting the backend. The UI expects the backend to be running on `http://localhost:8000`.
 
 ## 2. Frontend Setup
 
